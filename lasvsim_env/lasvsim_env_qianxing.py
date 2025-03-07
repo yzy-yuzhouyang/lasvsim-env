@@ -1,6 +1,6 @@
 import os
 import random
-import time
+from time import time
 from shapely import segmentize
 from collections import deque
 from typing import Any, Dict, Tuple, List, Deque
@@ -11,7 +11,7 @@ from shapely.geometry import Point, LineString, Polygon
     
 from lasvsim_openapi.client import Client
 from lasvsim_openapi.http_client import HttpConfig
-from lasvsim_openapi.simulator_model import SimulatorConfig
+from lasvsim_openapi.simulator_model import SimulatorConfig, Point as QxPoint
 from lasvsim_env.lasvsim_dataclasses import EgoVehicle, SurroundingVehicle, LasVSimContext
 from lasvsim_env.utils.map_tool.lib.map import Map
 from lasvsim_env.utils.lib import \
@@ -103,8 +103,8 @@ class LasvsimEnv():
         # init variables
         self.config = env_config
         self.scenario_cnt = 0
-        self.timestamp = 0
-        self.ref_index = 0
+        self.alive_step = 0
+        self.max_step = env_config["max_steps"]
         self.action_lower_bound = np.array(self.config["action_lower_bound"])
         self.action_upper_bound = np.array(self.config["action_upper_bound"])
         self.action_center = (self.action_upper_bound +
@@ -115,7 +115,9 @@ class LasvsimEnv():
             self.config["real_action_upper_bound"])
         self.real_action_lower = np.array(
             self.config["real_action_lower_bound"])
-        self.surr_veh_num = self.config['obs_num_surrounding_vehicles']
+
+        self.max_num_map_observed = self.config['obs_dict']['max_num_map_observed']
+        self.surr_veh_num = self.config['obs_dict']['max_num_agents_observed']
         
         # init ego vehicle
         test_vehicle = self.get_remote_lasvsim_test_veh_list()
@@ -129,7 +131,6 @@ class LasvsimEnv():
         self.can_not_get_lane_id = False
         self.step_remote_lasvsim()
         self.update_lasvsim_context()
-        self.traj_flag = traj_flag  # for log
         # self._render_init(render_info=render_info)
 
         # ================== 3. Process static map, surroundings and render ==================
@@ -239,9 +240,16 @@ class LasvsimEnv():
         return self.simulator.stop()
 
     def update_lasvsim_context(self, real_action: np.ndarray = None):
+        time_1 = time()
         ego_context = self.get_ego_context(real_action)
+        time_2 = time()
+        # print(f"----get_ego_context: {(time_2 - time_1) * 1000} ms.")
         ref_contex = self.get_ref_context()
+        time_3 = time()
+        # print(f"----get_ref_context: {(time_3 - time_2) * 1000} ms.")
         sur_context = self.get_sur_context()
+        time_4 = time()
+        # print(f"----get_sur_context: {(time_4 - time_3) * 1000} ms.")
         
         # Update history_sur_veh
         self.history_sur_veh.append(sur_context)
@@ -252,44 +260,18 @@ class LasvsimEnv():
             ref_list=ref_contex,
             sur_list=sur_context
         )
-    
-    def get_traffic_light_param(self) -> np.ndarray:
-        N = self.config["N"]
-        # # from vehicle CG to stopline
-        # if env.engine.context.vehicle.ahead_lane_length != -1:
-        #     ahead_lane_length = env.engine.context.vehicle.ahead_lane_length + \
-        #         env.engine.context.vehicle.length * 0.5
-        # else:
-        #     ahead_lane_length = env.engine.context.vehicle.ahead_lane_length
-        # remain_phase_time = env.engine.context.vehicle.remain_phase_time
-        # in_junction = env.engine.context.vehicle.in_junction
-        # if ahead_lane_length < model_config.ahead_lane_length_max \
-        #         and ahead_lane_length >= 0.:
-        #     traffic_light = encode_traffic_light(
-        #         env.engine.context.vehicle.traffic_light)
-        # else:
-        #     traffic_light = encode_traffic_light('g')
+        time_5 = time()
+        # print(f"----set lasvsim_context: {(time_5 - time_4) * 1000} ms.")
 
-        traffic_light = 0
-        in_junction = self.lasvsim_context.ego.in_junction
-        ahead_lane_length = 50
-        traffic_light_param = np.ones((N+1, 3))
-        traffic_light_param[:, 0] = traffic_light * np.ones((N+1))
-        traffic_light_param[:, 1] = ahead_lane_length * np.ones((N+1))
-        traffic_light_param[:, 2] = in_junction * np.ones((N+1))
-        return traffic_light_param
 
     def get_all_ref_param(self) -> np.ndarray:
-        # [num_ref_lines, num_ref_points+N, per_point_dim]
-        N = self.config["N"]
-        num_ref_lines = self.config["num_ref_lines"]
-        num_ref_points = self.config["num_ref_points"]
+        # return: ref_param [VARIABLE_NUM, ref_horizon, per_point_dim]
+        ref_horizon = self.config["ref_horizon"]
         ref_list = self.lasvsim_context.ref_list
-        ref_v_lane = self.config["ref_v_lane"] # TODO: RANDOM REF_V_LANE
-        # print("ref_v_lane:", ref_v_lane)
+        traffic_light = 0 # TODO: get traffic light from qianxing self.lasvsim_context.xxxx
+        max_speed = self.config["max_speed"]
         dt = self.config["dt"]
 
-        traffic_light = self.get_traffic_light_param()[0, 0]
         path_planning_mode = "green"
         if traffic_light == 0:
             am = self.config["dec_before_junction_green"]
@@ -301,15 +283,15 @@ class LasvsimEnv():
         
         driving_task = "s"
         if driving_task == "s":
-            ref_v_junction = ref_v_lane * self.config["v_discount_in_junction_straight"]
+            ref_v_junction = max_speed * self.config["v_discount_in_junction_straight"]
         elif driving_task == "l":
-            ref_v_junction = ref_v_lane * self.config["v_discount_in_junction_left_turn"]
+            ref_v_junction = max_speed * self.config["v_discount_in_junction_left_turn"]
         elif driving_task == "r":
-            ref_v_junction = ref_v_lane * self.config["v_discount_in_junction_right_turn"]
+            ref_v_junction = max_speed * self.config["v_discount_in_junction_right_turn"]
         else:
             raise ValueError("Error driving task: {}".format(driving_task))
         
-        cur_v = ref_v_lane
+        cur_v = max_speed
 
         ref_param = []
         for ref_line in ref_list:
@@ -325,17 +307,17 @@ class LasvsimEnv():
             
             if current_part['destination'] == True:
                 position_on_ref = point_project_to_line(ref_line, *ego.ground_position)
-                intervals, ref_v = compute_intervals(ref_info, num_ref_points + N -1, cur_v, ref_v_lane, dt, 0)
+                intervals, ref_v = compute_intervals(ref_info, ref_horizon, cur_v, max_speed, dt, 0)
             elif current_part['destination'] == False and current_part["in_junction"] == True:
                 intervals, ref_v = compute_intervals_in_junction(
-                    num_ref_points + N - 1, ref_v_junction, dt)
+                    ref_horizon, ref_v_junction, dt)
             elif current_part["in_junction"] == False and current_part['destination'] == False:
                 if path_planning_mode == "green":
                     intervals, ref_v = compute_intervals_initsegment_green(
-                        position_on_ref, current_part, num_ref_points + N - 1, ref_v_lane, ref_v_junction, dt, am)
+                        position_on_ref, current_part, ref_horizon, max_speed, ref_v_junction, dt, am)
                 elif path_planning_mode == "red":
                     intervals, ref_v = compute_intervals_initsegment_red(
-                        position_on_ref, current_part, num_ref_points + N - 1, ref_v_lane, dt, am, min_ahead_lane_length)
+                        position_on_ref, current_part, ref_horizon, max_speed, dt, am, min_ahead_lane_length)
                 else:
                     raise ValueError("Error path_planning_mode")
             else:
@@ -347,9 +329,6 @@ class LasvsimEnv():
             ref_array = compute_waypoints_by_intervals(ref_line, position_on_ref, intervals)
             ref_array = np.concatenate((ref_array, ref_v), axis=-1)
             ref_param.append(ref_array)
-        # padding
-        for _ in range(num_ref_lines - len(ref_list)):
-            ref_param.append(ref_param[0])
         return np.array(ref_param)
         
     def get_obs_from_context(self):
@@ -387,9 +366,10 @@ class LasvsimEnv():
         # Calculate distances to ego center
         distances = np.sqrt(np.sum((obj_centers - ego_center) ** 2, axis=1))
 
-        # Use partition to find indices of 200 nearest objects 
-        selected_obj_index = np.argpartition(distances, 200)[:200]
-        selected_objs = self.map_objs[selected_obj_index]
+        # Use partition to find indices of self.max_num_map_observed nearest objects 
+        selected_indices = np.argpartition(distances, self.max_num_map_observed)[:self.max_num_map_observed]
+        sorted_indices = selected_indices[np.argsort(distances[selected_indices])]
+        selected_objs = self.map_objs[sorted_indices]
         
         cos_tf = np.cos(-ego_phi)
         sin_tf = np.sin(-ego_phi)
@@ -454,21 +434,39 @@ class LasvsimEnv():
 
     def step(self, action: np.ndarray):
         # action: network output, \in [-1, 1]
+        self.alive_step += 1
+
+        time_1 = time()
         action = inverse_normalize_action(action, self.action_half_range, self.action_center)
         real_action = action + self.lasvsim_context.ego.last_action
         real_action = np.clip(
             real_action, self.real_action_lower, self.real_action_upper)
+        
+        time_2 = time()
+        # print(f"--before set remote control: {(time_2 - time_1) * 1000} ms.")
         self.set_remote_lasvsim_veh_control(real_action)
+        time_3 = time()
+        # print(f"--set remote control: {(time_3 - time_2) * 1000} ms.")
         self.step_remote_lasvsim()
+        time_4 = time()
+        # print(f"--step_remote_lasvsim: {(time_4 - time_3) * 1000} ms.")
         self.update_lasvsim_context(real_action)
+        time_5 = time()
+        # print(f"--update_lasvsim_context: {(time_5 - time_4) * 1000} ms.")
 
         reward, rew_info = self.reward_function_multilane()
+        time_6 = time()
+        # print(f"--reward_function_multilane: {(time_6 - time_5) * 1000} ms.")
 
         obs = self.get_obs_from_context()
-        return obs, reward, self.judge_done(), self.judge_done(), rew_info
+        truncated = self.alive_step >= self.max_step
+        time_7 = time()
+        # print(f"--get_obs_from_context: {(time_7 - time_6) * 1000} ms.")
+        return obs, reward, self.judge_done(), truncated, rew_info
 
     def reset(self):
         test_vehicle_list = []
+        self.alive_step = 0
         if self.scenario_cnt < 10:
             while len(test_vehicle_list) == 0:
                 self.reset_remote_lasvsim()
@@ -494,6 +492,23 @@ class LasvsimEnv():
             self.scenario_cnt = 0
 
         self.ego_id = test_vehicle_list[0]
+        # TODO: 速度和位置的随机初始化
+        random_init_v = np.random.uniform(0, 10)
+        self.simulator.set_vehicle_moving_info(self.ego_id, random_init_v)
+        # 获取自车位置
+        vehicles_position = self.get_remote_lasvsim_veh_position()
+        x = vehicles_position.position_dict.get(self.ego_id).point.x
+        y = vehicles_position.position_dict.get(self.ego_id).point.y
+        phi = vehicles_position.position_dict.get(self.ego_id).phi
+        random_offset_x = np.random.normal(0.0, 1.0)
+        random_offset_y = np.random.normal(0.0, 1.0)
+        random_offset_phi = np.random.normal(0.0, 0.1)
+        self.simulator.set_vehicle_position(self.ego_id, QxPoint(
+            x + random_offset_x,
+            y + random_offset_y,
+            phi + random_offset_phi
+        ))
+
         self.update_lasvsim_context()
         obs = self.get_obs_from_context()
         info = {}
@@ -967,31 +982,46 @@ class LasvsimEnv():
 
     def check_out_of_driving_area(self) -> bool:
         vehicles_position = self.get_remote_lasvsim_veh_position()
-        ego_pos = vehicles_position.position_dict.get(self.ego_id).position_type
-        out_of_driving_area_flag = (ego_pos == 1)
+        ego_pos = vehicles_position.position_dict.get(self.ego_id).type
+        out_of_driving_area_flag = (ego_pos == 3)
         return out_of_driving_area_flag
 
     def judge_done(self) -> bool:
+        time_1 = time()
         collision = self.check_collision()
+        time_2 = time()
+        # print(f"--check_collision:{(time_2 - time_1) * 1000} ms.")
         out_of_driving_area = self.check_out_of_driving_area()
+        time_3 = time()
+        # print(f"--check_out_of_driving_area:{(time_3 - time_2) * 1000} ms.")
         park_flag = (self.lasvsim_context.ego.u == 0)
         out_of_defined_region = self.out_of_range
         self._render_done_info = {
             "Pause": park_flag,
             "RegionOut": out_of_defined_region,
             "Collision": collision,
-            "MapOut": out_of_driving_area
+            "MapOut": out_of_driving_area,
+            "alive_step": self.alive_step
         }
         done = collision or out_of_defined_region or out_of_driving_area
+        time_4 = time()
+        # print(f"--before judge_done:{(time_4 - time_3) * 1000} ms.")
         if done:
             print('# DONE')
             print(self._render_done_info)
         return done
 
     def get_ego_context(self, real_actiton: np.ndarray = None):
+        time_1 = time()
         vehicles_position = self.get_remote_lasvsim_veh_position()
+        time_2 = time()
+        # print(f"------get_remote_lasvsim_veh_position: {(time_2 - time_1) * 1000} ms.")
         vehicles_baseInfo = self.get_remote_lasvsim_veh_base_info()
+        time_3 = time()
+        # print(f"------get_remote_lasvsim_veh_base_info: {(time_3 - time_2) * 1000} ms.")
         vehicles_movingInfo = self.get_remote_lasvsim_veh_moving_info()
+        time_4 = time()
+        # print(f"------get_remote_lasvsim_veh_moving_info: {(time_4 - time_3) * 1000} ms.")
 
         x = vehicles_position.position_dict.get(self.ego_id).point.x
         y = vehicles_position.position_dict.get(self.ego_id).point.y
@@ -1062,6 +1092,9 @@ class LasvsimEnv():
         state = np.array([x, y, u, v, phi, w])
         last_action = self.lasvsim_context.ego.action
 
+        time_5 = time()
+        # print(f"------other in get_ego_context: {(time_5 - time_4) * 1000} ms.")
+
         return EgoVehicle(
             x=x, y=y, phi=phi, u=u, v=v, w=w,
             length=length, width=width,
@@ -1077,7 +1110,10 @@ class LasvsimEnv():
         )
 
     def get_ref_context(self):
+        time_1 = time()
         ref_points = self.get_remote_lasvsim_ref_line()
+        time_2 = time()
+        # print(f"------get_remote_lasvsim_ref_line: {(time_2 - time_1) * 1000} ms.")
         # breakpoint()
         ref_lines = ref_points.reference_lines
         if len(ref_lines)==0:
@@ -1098,6 +1134,8 @@ class LasvsimEnv():
                                 for point in ref_line.points])
             ref_line_string = LineString(ref_line_xy)
             ref_context.append(ref_line_string)
+        time_3 = time()
+        # print(f"------other: {(time_3 - time_2) * 1000} ms.")
         return ref_context
 
     def get_sur_context(self):

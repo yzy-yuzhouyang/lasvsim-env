@@ -2,13 +2,12 @@
 
 千行仿真平台（Lasvsim）的 Python SDK。提供了一种简单直观的方式来控制和获取自动驾驶场景的仿真。
 
-## 安装
-
-您可以直接从PyPI安装该软件包：
+## 安装（通过本地pip安装）
 
 ```bash
-pip install lasvsim-openapi
+pip install -e .
 ```
+Zhangxt修改于2025.3.6
 
 ## 快速开始
 
