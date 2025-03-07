@@ -59,8 +59,9 @@ class LasvsimEnv():
         token: str,
         env_config: Dict = {},
         task_id=None,
-        render_flag: bool = False,
+        record_id=None,
         traj_flag: bool = False,
+        is_testing: bool = False,
         **kwargs: Any,
     ):
         self.metadata = [('authorization', 'Bearer ' + token)]
@@ -73,14 +74,30 @@ class LasvsimEnv():
             endpoint=endpoint,  # 接口地址
             token=token,  # 授权token
         ))
-        scene_list = self.qx_client.train_task.get_scene_id_list(task_id)
-        self.scenario_list = scene_list.scene_id_list
-        self.version_list = scene_list.scene_version_list
-        self.scenario_id = self.scenario_list[0]
-        self.simulator = self.init_remote_lasvsim(
-            scenario_id=scene_list.scene_id_list[0],
-            scenario_version=scene_list.scene_version_list[0]
-        )
+        if not is_testing: # 训练环境
+            scene_list = self.qx_client.train_task.get_scene_id_list(task_id)
+            self.scenario_list = scene_list.scene_id_list
+            self.version_list = scene_list.scene_version_list
+            self.scenario_id = self.scenario_list[0]
+            self.simulator = self.init_remote_lasvsim(
+                scenario_id=scene_list.scene_id_list[0],
+                scenario_version=scene_list.scene_version_list[0]
+            )
+        else: # 测试环境
+            print("initializing test environment...")
+            new_record = self.qx_client.process_task.copy_record(task_id, record_id)
+            self.scenario_list = [new_record.scen_id]
+            self.version_list = [new_record.scen_ver]
+            self.scenario_id = new_record.scen_id
+            self.simulator = self.qx_client.init_simulator_from_config(
+                                SimulatorConfig(
+                                    scen_id=new_record.scen_id,
+                                    scen_ver=new_record.scen_ver,
+                                    sim_record_id=new_record.sim_record_id,
+                                )
+            )
+            
+      
 
         # ================== 2. Init simulator ==================
         # init variables
@@ -112,7 +129,6 @@ class LasvsimEnv():
         self.can_not_get_lane_id = False
         self.step_remote_lasvsim()
         self.update_lasvsim_context()
-        self.render_flag = render_flag
         self.traj_flag = traj_flag  # for log
         # self._render_init(render_info=render_info)
 
