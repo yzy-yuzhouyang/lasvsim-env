@@ -555,12 +555,12 @@ class LasvsimEnv():
             np.abs(ego_r) + 2,
         )  # 0~1  0~8 degree/s 50% 0~2 degree/s
 
-        punish_overspeed = np.clip(
-            np.where(
-                ego_vx > 1.05 * ref_v,
-                1 + np.abs(ego_vx - 1.05 * ref_v),
-                0, ),
-            0, 2)
+        punish_overspeed = np.zeros(ref_param.shape[0])
+        index_lowspeed = ego_vx < ref_v
+        punish_overspeed[index_lowspeed] = 2 * (1 - ego_vx / ref_v[index_lowspeed])
+        index_overspeed = ego_vx > 1.1 * ref_v
+        punish_overspeed[index_overspeed] = (1 + ego_vx - ref_v[index_overspeed])
+        punish_overspeed = np.clip(punish_overspeed, 0, 2)
 
         # reward related to action
         nominal_steer = self._get_nominal_steer_by_state_batch(
@@ -633,10 +633,9 @@ class LasvsimEnv():
 
         # tracking related reward
         scaled_punish_dist_lat = punish_dist_lat * self.config["P_lat"]
-        scaled_punish_vel_long = punish_vel_long * self.config["P_long"]
         scaled_punish_head_ang = punish_head_ang * self.config["P_phi"]
         scaled_punish_yaw_rate = punish_yaw_rate * self.config["P_yaw"]
-        scaled_punish_overspeed = punish_overspeed * 3  # TODO: hard coded value
+        scaled_punish_overspeed = punish_overspeed * self.config["P_overspeed"]  # TODO: hard coded value
 
         # action related reward
         scaled_reward_steering = reward_steering * self.config["P_steer"]
@@ -650,7 +649,6 @@ class LasvsimEnv():
 
         reward_ego_state = scaled_rew_step - \
             (scaled_punish_dist_lat +
-             scaled_punish_vel_long +
              scaled_punish_head_ang +
              scaled_punish_yaw_rate +
              scaled_punish_nominal_acc +
@@ -664,36 +662,26 @@ class LasvsimEnv():
 
         rewards = reward_ego_state.tolist()
         infos = [{
-            "env_tracking_error": np.abs(tracking_error[i]),
-            "env_speed_error": np.abs(speed_error[i]),
-            "env_delta_phi": np.abs(delta_phi[i]),
-            "state_nominal_steer": nominal_steer[i],
-            "state_nominal_acc": nominal_acc[i],
+            "reward_part2": reward_ego_state[i],
+            "reward_step": scaled_rew_step[i],
+            "reward_dist_lat": -scaled_punish_dist_lat[i],
+            "reward_head_ang": -scaled_punish_head_ang[i],
+            "reward_nominal_acc": -scaled_punish_nominal_acc[i],
+            "reward_overspeed": -scaled_punish_overspeed[i],
+            "reward_yaw_rate": -scaled_punish_yaw_rate[i],
+            "reward_steering": scaled_reward_steering[i],
+            "reward_acc_long": scaled_reward_acc_long[i],
+            "reward_delta_steer": scaled_reward_delta_steer[i],
+            "reward_jerk": scaled_reward_jerk[i],
 
-            "env_reward_step": rew_step[i],
-
-            "env_reward_steering": reward_steering[i],
-            "env_reward_acc_long": reward_acc_long[i],
-            "env_reward_delta_steer": reward_delta_steer[i],
-            "env_reward_jerk": reward_jerk[i],
-
-            "env_reward_dist_lat": -punish_dist_lat[i],
-            "env_reward_vel_long": -punish_vel_long[i],
-            "env_reward_head_ang": -punish_head_ang[i],
-            "env_reward_yaw_rate": -punish_yaw_rate[i],
-
-            "env_scaled_reward_part2": reward_ego_state[i],
-            "env_scaled_reward_step": scaled_rew_step[i],
-            "env_scaled_reward_dist_lat": -scaled_punish_dist_lat[i],
-            "env_scaled_reward_vel_long": -scaled_punish_vel_long[i],
-            "env_scaled_reward_head_ang": -scaled_punish_head_ang[i],
-            "env_scaled_reward_yaw_rate": -scaled_punish_yaw_rate[i],
-            "env_scaled_reward_nominal_acc": -scaled_punish_nominal_acc[i],
-            "env_scaled_reward_overspeed": -scaled_punish_overspeed[i],
-            "env_scaled_reward_steering": scaled_reward_steering[i],
-            "env_scaled_reward_acc_long": scaled_reward_acc_long[i],
-            "env_scaled_reward_delta_steer": scaled_reward_delta_steer[i],
-            "env_scaled_reward_jerk": scaled_reward_jerk[i],
+            "ego_vx": ego_vx,
+            "ego_speed2limit": speed_error[i],
+            "ego_abs_phi_error": np.abs(delta_phi[i]),
+            "ego_tracking_error": tracking_error[i],
+            "ego_asb_yaw_rate": np.abs(ego_r[i]),
+            
+            "action_abs_steer": np.abs(last_steer),
+            "action_abs_acc": np.abs(last_acc),
         } for i in range(ref_param.shape[0])]
 
         return rewards, infos
@@ -943,19 +931,16 @@ class LasvsimEnv():
         #     reward += 200.
         return reward, {
             "category": event_flag,
-            "env_pun2front": pun2front,
-            "env_pun2side": pun2side,
-            "env_pun2space": pun2space,
-            "env_pun2rear": pun2rear,
-            "env_scaled_reward_part1": reward,
-            "env_scaled_reward_done": reward_done,
-            "env_scaled_reward_collision": reward_collision,
-            "env_scaled_reward_collision_risk": - punish_collision_risk,
-            "env_scaled_pun2front": scaled_pun2front,
-            "env_scaled_pun2side": scaled_pun2side,
-            "env_scaled_pun2space": scaled_pun2space,
-            "env_scaled_pun2rear": scaled_pun2rear,
-            "env_scaled_reward_boundary": - scaled_punish_boundary,
+
+            "reward_part1": reward,
+            "reward_done": reward_done,
+            "reward_collision": reward_collision,
+            "reward_collision_risk": - punish_collision_risk,
+            "rewardcomp_pun2front": scaled_pun2front,
+            "rewardcomp_pun2side": scaled_pun2side,
+            "rewardcomp_pun2space": scaled_pun2space,
+            "rewardcomp_pun2rear": scaled_pun2rear,
+            "reward_boundary": - scaled_punish_boundary,
         }
     
     def check_collision(self) -> bool:
@@ -975,11 +960,11 @@ class LasvsimEnv():
         park_flag = (self.lasvsim_context.ego.u == 0)
         out_of_defined_region = self.out_of_range
         self._render_done_info = {
-            "Pause": park_flag,
-            "RegionOut": out_of_defined_region,
-            "Collision": collision,
-            "MapOut": out_of_driving_area,
-            "alive_step": self.alive_step
+            "event_pause": park_flag,
+            "event_regionout": out_of_defined_region,
+            "event_collision": collision,
+            "event_mapout": out_of_driving_area,
+            "event_alive_step": self.alive_step
         }
         done = collision or out_of_defined_region or out_of_driving_area
         
@@ -1004,7 +989,7 @@ class LasvsimEnv():
         link_id = vehicles_position.position_dict.get(self.ego_id).link_id
         segment_id = vehicles_position.position_dict.get(
             self.ego_id).segment_id
-        ego_pos = vehicles_position.position_dict.get(self.ego_id).position_type
+        ego_pos = vehicles_position.position_dict.get(self.ego_id).type
         in_junction = (ego_pos == 2)
 
         length = vehicles_baseInfo.info_dict.get(self.ego_id).base_info.length

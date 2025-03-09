@@ -39,10 +39,8 @@ class Config:
     enable_slow_reward: bool = False
     R_step: float = 5.0
     P_lat: float = 5.0
-    P_long: float = 2.5
     P_phi: float = 20.0
     P_yaw: float = 10.0
-    P_vel: float = 3.0
     P_front: float = 5.0
     P_side: float = 5.0
     P_space: float = 5.0
@@ -53,6 +51,7 @@ class Config:
     P_jerk: float = 0.1
     P_boundary: float = 0.0
     P_done: float = 2000.0
+    P_overspeed: float = 5.0
 
     safety_lat_margin_front: float = 0.0
     safety_long_margin_front: float = 0.0

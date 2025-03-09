@@ -26,7 +26,7 @@ env_config_multilane = {
     "real_action_lower_bound": (-1.5, -0.065),
     "real_action_upper_bound": (0.8, 0.065),
     "max_speed": 12.0,
-
+    
     # obs config
     "obs_dict": {
         "ego": 5,
@@ -46,10 +46,8 @@ env_config_multilane = {
     "enable_slow_reward": True,
     "R_step": 12.0,
     "P_lat": 7.5/5, # lateral penalty
-    "P_long": 0.0,
     "P_phi": 2.0/5, # phi penalty
     "P_yaw": 1.5/5, # yaw penalty
-    "P_vel": 3.0,
     "P_front": 5.0,
     "P_side": 0.0,
     "P_space": 5.0,
@@ -60,6 +58,7 @@ env_config_multilane = {
     "P_jerk": 0.3,
     "P_done": 200.0,
     "P_boundary": 0,
+    "P_overspeed": 5.0,
     "safety_lat_margin_front": 0.3,
     "safety_long_margin_front": 0.0,
     "safety_long_margin_side": 2.0,
