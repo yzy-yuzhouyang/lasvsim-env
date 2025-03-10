@@ -443,8 +443,10 @@ class LasvsimEnv():
 
         obs = self.get_obs_from_context()
         truncated = self.alive_step >= self.max_step
+
+        done, done_info = self.judge_done()
         
-        return obs, reward, self.judge_done(), truncated, rew_info
+        return obs, reward, done, truncated, {**rew_info, **done_info}
 
     def reset(self):
         test_vehicle_list = []
@@ -677,7 +679,7 @@ class LasvsimEnv():
             "ego_vx": ego_vx,
             "ego_speed2limit": speed_error[i],
             "ego_abs_phi_error": np.abs(delta_phi[i]),
-            "ego_tracking_error": tracking_error[i],
+            "ego_abs_tracking_error": np.abs(tracking_error[i]),
             "ego_asb_yaw_rate": np.abs(ego_r[i]),
             
             "action_abs_steer": np.abs(last_steer),
@@ -971,7 +973,7 @@ class LasvsimEnv():
         if done:
             print(f"# DONE: {self._render_done_info}")
 
-        return done
+        return done, self._render_done_info
 
     def get_ego_context(self, real_actiton: np.ndarray = None):
         vehicles_position = self.get_remote_lasvsim_veh_position()

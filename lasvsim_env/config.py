@@ -69,8 +69,8 @@ class Config:
     real_action_upper_bound: Tuple[float, float] = ( 0.8,  0.065)
 
     # ===== Planning =====
-    act_repeat_num: int = 1
-    act_seq_len: int = 20
+    qx_act_repeat_num: int = 1 # the action repeat has not been implemented
+    qx_act_seq_len: int = 20
     ref_horizon: int = 20
 
     # ===== Model config =====
