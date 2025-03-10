@@ -662,29 +662,29 @@ class LasvsimEnv():
 
         reward_ego_state = np.clip(reward_ego_state, -5, 30)
 
-        rewards = reward_ego_state.tolist()
-        infos = [{
-            "reward_part2": reward_ego_state[i],
-            "reward_step": scaled_rew_step[i],
-            "reward_dist_lat": -scaled_punish_dist_lat[i],
-            "reward_head_ang": -scaled_punish_head_ang[i],
-            "reward_nominal_acc": -scaled_punish_nominal_acc[i],
-            "reward_overspeed": -scaled_punish_overspeed[i],
-            "reward_yaw_rate": -scaled_punish_yaw_rate[i],
-            "reward_steering": scaled_reward_steering[i],
-            "reward_acc_long": scaled_reward_acc_long[i],
-            "reward_delta_steer": scaled_reward_delta_steer[i],
-            "reward_jerk": scaled_reward_jerk[i],
+        rewards = reward_ego_state
+        infos = {
+            "reward_part2": reward_ego_state,
+            "reward_step": scaled_rew_step,
+            "reward_dist_lat": -scaled_punish_dist_lat,
+            "reward_head_ang": -scaled_punish_head_ang,
+            "reward_nominal_acc": -scaled_punish_nominal_acc,
+            "reward_overspeed": -scaled_punish_overspeed,
+            "reward_yaw_rate": -scaled_punish_yaw_rate,
+            "reward_steering": scaled_reward_steering,
+            "reward_acc_long": scaled_reward_acc_long,
+            "reward_delta_steer": scaled_reward_delta_steer,
+            "reward_jerk": scaled_reward_jerk,
 
-            "ego_vx": ego_vx,
-            "ego_speed2limit": speed_error[i],
-            "ego_abs_phi_error": np.abs(delta_phi[i]),
-            "ego_abs_tracking_error": np.abs(tracking_error[i]),
-            "ego_asb_yaw_rate": np.abs(ego_r[i]),
+            "ego_vx": np.repeat(ego_vx, ref_param.shape[0]),
+            "ego_speed2limit": speed_error,
+            "ego_abs_phi_error": np.abs(delta_phi),
+            "ego_abs_tracking_error": np.abs(tracking_error),
+            "ego_abs_yaw_rate": np.abs(ego_r),
             
-            "action_abs_steer": np.abs(last_steer),
-            "action_abs_acc": np.abs(last_acc),
-        } for i in range(ref_param.shape[0])]
+            "action_abs_steer": np.repeat(np.abs(last_steer), ref_param.shape[0]),
+            "action_abs_acc": np.repeat(np.abs(last_acc), ref_param.shape[0]),
+        }
 
         return rewards, infos
 
