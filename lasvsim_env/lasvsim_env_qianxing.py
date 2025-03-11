@@ -416,7 +416,6 @@ class LasvsimEnv():
         self.set_remote_lasvsim_veh_control(real_action)
         
         res = self.step_remote_lasvsim()
-        self.success = (res.code == 1001)
         
         self.update_lasvsim_context(real_action)
 
@@ -424,15 +423,12 @@ class LasvsimEnv():
 
         obs = self.get_obs_from_context()
 
-        self.max_step_truncated = (self.alive_step >= self.max_step)
+        terminated, truncated, done_info = self.judge_done(res)
 
-        truncated = self.max_step_truncated or self.success
-        done, done_info = self.judge_done()
-
-        # if done or truncated:
+        # if terminated or truncated:
         #     print(f"alive step: {self.alive_step}, done info: {[event for event in done_info if done_info[event]]}")
         
-        return obs, reward, done, truncated, {**rew_info, **done_info, "event_alive_step": self.alive_step}
+        return obs, reward, terminated, truncated, {**rew_info, **done_info, "event_alive_step": self.alive_step}
 
     def reset(self):
         test_vehicle_list = []
@@ -943,28 +939,33 @@ class LasvsimEnv():
         out_of_driving_area_flag = (ego_pos == 3)
         return out_of_driving_area_flag
 
-    def judge_done(self) -> bool:
+    def judge_done(self, res) -> bool:
+        # terminated
         park_flag = (self.lasvsim_context.ego.u == 0)
-        out_of_defined_region = self.out_of_range
         collision = self.check_collision()
+        out_of_defined_region = self.out_of_range
         out_of_driving_area = self.check_out_of_driving_area()
-        success = self.success
-        max_step_truncated = self.max_step_truncated
+
+        # truncated
+        max_step_truncated = (self.alive_step >= self.max_step)
+        success = (res.code == 1001) and (collision == 0)
 
         done_info = {
             "event_pause": park_flag,
-            "event_regionout": out_of_defined_region,
             "event_collision": collision,
+            "event_regionout": out_of_defined_region,
             "event_mapout": out_of_driving_area,
-            "event_success": success,
             "event_max_step_truncated": max_step_truncated,
+            "event_success": success,
         }
-        done = collision or out_of_defined_region or out_of_driving_area
+
+        terminated = collision or out_of_defined_region or out_of_driving_area
+        truncated = max_step_truncated or success
         
         # if done:
         #     print(f"# DONE: {done_info}")
 
-        return done, done_info
+        return terminated, truncated, done_info
 
     def get_ego_context(self, real_actiton: np.ndarray = None):
         vehicles_position = self.get_remote_lasvsim_veh_position()
