@@ -415,8 +415,8 @@ class LasvsimEnv():
         
         self.set_remote_lasvsim_veh_control(real_action)
         
-        code, _ = self.step_remote_lasvsim()
-        self.success = (code == 1001)
+        res = self.step_remote_lasvsim()
+        self.success = (res.code == 1001)
         
         self.update_lasvsim_context(real_action)
 
@@ -945,6 +945,9 @@ class LasvsimEnv():
         out_of_driving_area = self.check_out_of_driving_area()
         success = self.success
 
+        if success:
+            print(f"success at step: {self.alive_step}")
+
         done_info = {
             "event_pause": park_flag,
             "event_regionout": out_of_defined_region,
@@ -1156,7 +1159,7 @@ class LasvsimEnv():
         return self.simulator.get_vehicle_navigation_info(self.ego_id).navigation_info.link_nav
 
     def reset_remote_lasvsim(self):
-        return self.simulator.reset()
+        return self.simulator.reset(reset_traffic_flow=True)
 
     def step_remote_lasvsim(self):
         return self.simulator.step()
