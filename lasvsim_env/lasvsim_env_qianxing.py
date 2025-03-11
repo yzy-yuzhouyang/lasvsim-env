@@ -665,6 +665,9 @@ class LasvsimEnv():
             
             "action_abs_steer": np.repeat(np.abs(last_steer), ref_param.shape[0]),
             "action_abs_acc": np.repeat(np.abs(last_acc), ref_param.shape[0]),
+
+            "action_abs_delta_steer": np.abs(delta_steer) * self.config["dt"],
+            "action_abs_delta_acc": np.abs(jerk) * self.config["dt"],
         }
 
         return rewards, infos
@@ -917,13 +920,13 @@ class LasvsimEnv():
 
             "reward_part1": reward,
             "reward_done": reward_done,
+            "reward_boundary": - scaled_punish_boundary,
             "reward_collision": reward_collision,
             "reward_collision_risk": - punish_collision_risk,
             "rewardcomp_pun2front": scaled_pun2front,
             "rewardcomp_pun2side": scaled_pun2side,
             "rewardcomp_pun2space": scaled_pun2space,
             "rewardcomp_pun2rear": scaled_pun2rear,
-            "reward_boundary": - scaled_punish_boundary,
         }
     
     def check_collision(self) -> bool:
