@@ -48,6 +48,12 @@ def convert_ground_coord_to_ego_coord(x, y, phi, ego_x, ego_y, ego_phi):
         = rotate(shift_x, shift_y, phi, ego_phi)
     return x_ego_coord, y_ego_coord, phi_ego_coord
 
+def convert_ego_coord_to_ground_coord(x, y, phi, ego_x, ego_y, ego_phi):
+    shift_x, shift_y, phi_ground_coord = rotate(x, y, phi, -ego_phi)
+    x_ground_coord, y_ground_coord = shift(shift_x, shift_y, -ego_x, -ego_y)
+    return x_ground_coord, y_ground_coord, phi_ground_coord
+
+
 def shift(orig_x, orig_y, shift_x, shift_y):
     shifted_x = orig_x - shift_x
     shifted_y = orig_y - shift_y
