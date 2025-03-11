@@ -406,14 +406,12 @@ class LasvsimEnv():
         
         return obs
 
-    def step(self, action: np.ndarray):
+    def step(self, delta_action: np.ndarray):
         # action: network output, \in [-1, 1]
         self.alive_step += 1
 
-        action = inverse_normalize_action(action, self.action_half_range, self.action_center)
-        real_action = action + self.lasvsim_context.ego.last_action
-        real_action = np.clip(
-            real_action, self.real_action_lower, self.real_action_upper)
+        last_action = self.lasvsim_context.ego.action
+        real_action = self.get_real_action(delta_action, last_action)
         
         self.set_remote_lasvsim_veh_control(real_action)
         
@@ -1143,6 +1141,13 @@ class LasvsimEnv():
                 for lane in link.ordered_lanes:
                     # print("lane: ", lane)
                     self.lanes[lane.id] = lane
+
+    def get_real_action(self, delta_action: np.ndarray, last_action: np.ndarray):
+        # input normalized increment action, output clipped real action
+        delta_action = inverse_normalize_action(delta_action, self.action_half_range, self.action_center)
+        real_action = delta_action + last_action
+        real_action = np.clip(real_action, self.real_action_lower, self.real_action_upper)
+        return real_action
 
     def get_ego_navigation_info(self):
         return self.simulator.get_vehicle_navigation_info(self.ego_id).navigation_info.link_nav
