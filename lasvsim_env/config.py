@@ -20,6 +20,7 @@ dt = 0.1
 env_config_multilane = {
     "dt": dt,
     "max_steps": 200,
+    "eval_max_steps": 400,
     "action_lower_bound": (-2.5 * dt, -0.065 * dt),
     "action_upper_bound": (2.5 * dt, 0.065 * dt),
     "real_action_lower_bound": (-1.5, -0.065),

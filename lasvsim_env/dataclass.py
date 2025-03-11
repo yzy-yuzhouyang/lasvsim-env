@@ -65,7 +65,8 @@ class Config:
 
     # ===== Env =====
     dt: float = 0.1  # Do not change this value.
-    max_steps: int = 1000
+    max_steps: int = 200
+    eval_max_steps: int = 400
     penalize_collision: bool = True
     nonimal_acc: bool = False
 
