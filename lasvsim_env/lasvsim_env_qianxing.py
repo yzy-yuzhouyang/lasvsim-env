@@ -59,7 +59,6 @@ class LasvsimEnv():
         token: str,
         env_config: Dict = {},
         task_id=None,
-        record_id=None,
         is_testing: bool = False,
         **kwargs: Any,
     ):
@@ -84,6 +83,7 @@ class LasvsimEnv():
             )
         else: # 测试环境
             print("initializing test environment...")
+            record_id = self.qx_client.process_task.get_task_record_ids(task_id).record_ids[0]
             new_record = self.qx_client.process_task.copy_record(task_id, record_id)
             self.scenario_list = [new_record.scen_id]
             self.version_list = [new_record.scen_ver]
@@ -95,6 +95,7 @@ class LasvsimEnv():
                                     sim_record_id=new_record.sim_record_id,
                                 )
             )
+            print("New record id: ", new_record.new_record_id)
             
       
 
@@ -179,7 +180,7 @@ class LasvsimEnv():
                             # 添加车道中心线
                             lane_linestring = LineString([(p.point.x, p.point.y) for p in lane.center_line])
                             segmentized_linestring = segmentize(lane_linestring, max_segment_length=5.0)
-                            count = add_map_objs(segmentized_linestring, map_objs, max_speed=16.67, obj_type=CENTER_LINE)
+                            count = add_map_objs(segmentized_linestring, map_objs, max_speed=12.0, obj_type=CENTER_LINE)
                         elif lane.type == 2:
                             print(f"lane {lane.id} is bicycle lane.")
                             continue
@@ -961,7 +962,7 @@ class LasvsimEnv():
         
         park_flag = (self.lasvsim_context.ego.u == 0)
         out_of_defined_region = self.out_of_range
-        self._render_done_info = {
+        done_info = {
             "event_pause": park_flag,
             "event_regionout": out_of_defined_region,
             "event_collision": collision,
@@ -970,10 +971,10 @@ class LasvsimEnv():
         }
         done = collision or out_of_defined_region or out_of_driving_area
         
-        if done:
-            print(f"# DONE: {self._render_done_info}")
+        # if done:
+        #     print(f"# DONE: {done_info}")
 
-        return done, self._render_done_info
+        return done, done_info
 
     def get_ego_context(self, real_actiton: np.ndarray = None):
         vehicles_position = self.get_remote_lasvsim_veh_position()
