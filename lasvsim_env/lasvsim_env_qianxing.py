@@ -423,11 +423,16 @@ class LasvsimEnv():
         reward, rew_info = self.reward_function_multilane()
 
         obs = self.get_obs_from_context()
-        truncated = (self.alive_step >= self.max_step) or self.success
 
+        self.max_step_truncated = (self.alive_step >= self.max_step)
+
+        truncated = self.max_step_truncated or self.success
         done, done_info = self.judge_done()
+
+        # if done or truncated:
+        #     print(f"alive step: {self.alive_step}, done info: {[event for event in done_info if done_info[event]]}")
         
-        return obs, reward, done, truncated, {**rew_info, **done_info}
+        return obs, reward, done, truncated, {**rew_info, **done_info, "event_alive_step": self.alive_step}
 
     def reset(self):
         test_vehicle_list = []
@@ -944,9 +949,7 @@ class LasvsimEnv():
         collision = self.check_collision()
         out_of_driving_area = self.check_out_of_driving_area()
         success = self.success
-
-        if success:
-            print(f"success at step: {self.alive_step}")
+        max_step_truncated = self.max_step_truncated
 
         done_info = {
             "event_pause": park_flag,
@@ -954,7 +957,7 @@ class LasvsimEnv():
             "event_collision": collision,
             "event_mapout": out_of_driving_area,
             "event_success": success,
-            "event_alive_step": self.alive_step
+            "event_max_step_truncated": max_step_truncated,
         }
         done = collision or out_of_defined_region or out_of_driving_area
         
