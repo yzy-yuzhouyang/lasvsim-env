@@ -754,7 +754,8 @@ class LasvsimEnv():
         rel_v_rear_thd = self.config["rel_v_rear_thd"]
         time_dist = self.config["time_dist"]
 
-        punish_done = self.config["P_done"]
+        punish_out_of_map = self.config["P_out_of_map"]
+        punish_collision = self.config["P_collision"]
 
         pun2front = 0.
         pun2side = 0.
@@ -901,10 +902,10 @@ class LasvsimEnv():
         reward_collision = 0
         # Event reward: target reached, collision, out of driving area
         if self.check_out_of_driving_area() or self.out_of_range:  # out of driving area
-            reward_done = - punish_done
+            reward_done = - punish_out_of_map
             event_flag = 1
         elif self.active_collision:  # collision by ego vehicle
-            reward_collision = -20 if self.config["penalize_collision"] else 0.
+            reward_collision = - punish_collision if self.config["penalize_collision"] else 0.
             event_flag = 2
         elif self.braking_mode:  # start to brake
             event_flag = 3
@@ -937,8 +938,9 @@ class LasvsimEnv():
         return out_of_driving_area_flag
 
     def judge_done(self) -> bool:
+        park_flag = (self.lasvsim_context.ego.u == 0)
+        out_of_defined_region = self.out_of_range
         collision = self.check_collision()
-        
         out_of_driving_area = self.check_out_of_driving_area()
         
         park_flag = (self.lasvsim_context.ego.u == 0)

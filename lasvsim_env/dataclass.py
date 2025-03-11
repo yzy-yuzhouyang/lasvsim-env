@@ -97,7 +97,8 @@ class Config:
     P_delta_steer: float = 50.0
     P_jerk: float = 0.1
     P_boundary: float = 0.0
-    P_done: float = 2000.0
+    P_out_of_map: float = 200.0
+    P_collision: float = 200.0
     P_overspeed: float = 5.0
 
     safety_lat_margin_front: float = 0.0
