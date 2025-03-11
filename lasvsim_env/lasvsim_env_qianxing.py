@@ -415,14 +415,15 @@ class LasvsimEnv():
         
         self.set_remote_lasvsim_veh_control(real_action)
         
-        self.step_remote_lasvsim()
+        code, _ = self.step_remote_lasvsim()
+        self.success = (code == 1001)
         
         self.update_lasvsim_context(real_action)
 
         reward, rew_info = self.reward_function_multilane()
 
         obs = self.get_obs_from_context()
-        truncated = self.alive_step >= self.max_step
+        truncated = (self.alive_step >= self.max_step) or self.success
 
         done, done_info = self.judge_done()
         
@@ -942,14 +943,14 @@ class LasvsimEnv():
         out_of_defined_region = self.out_of_range
         collision = self.check_collision()
         out_of_driving_area = self.check_out_of_driving_area()
-        
-        park_flag = (self.lasvsim_context.ego.u == 0)
-        out_of_defined_region = self.out_of_range
+        success = self.success
+
         done_info = {
             "event_pause": park_flag,
             "event_regionout": out_of_defined_region,
             "event_collision": collision,
             "event_mapout": out_of_driving_area,
+            "event_success": success,
             "event_alive_step": self.alive_step
         }
         done = collision or out_of_defined_region or out_of_driving_area
