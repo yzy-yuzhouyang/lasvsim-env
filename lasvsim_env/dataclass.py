@@ -69,6 +69,7 @@ class Config:
     eval_max_steps: int = 400
     penalize_collision: bool = True
     nonimal_acc: bool = False
+    reset_traffic_flow: bool = True
 
     # ===== Obs config =====
     obs_dict: Dict[str, int] = field(default_factory=lambda: {

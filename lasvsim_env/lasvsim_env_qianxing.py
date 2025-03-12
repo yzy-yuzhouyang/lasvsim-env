@@ -430,12 +430,12 @@ class LasvsimEnv():
         
         return obs, reward, terminated, truncated, {**rew_info, **done_info, "event_alive_step": self.alive_step}
 
-    def reset(self):
+    def reset(self, reset_traffic_flow: bool = False):
         test_vehicle_list = []
         self.alive_step = 0
         if self.scenario_cnt < 10:
             while len(test_vehicle_list) == 0:
-                self.reset_remote_lasvsim()
+                self.reset_remote_lasvsim(reset_traffic_flow)
                 self.step_remote_lasvsim()
                 test_vehicle = self.get_remote_lasvsim_test_veh_list()
                 if test_vehicle is not None:
