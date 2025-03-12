@@ -1162,8 +1162,8 @@ class LasvsimEnv():
     def get_ego_navigation_info(self):
         return self.simulator.get_vehicle_navigation_info(self.ego_id).navigation_info.link_nav
 
-    def reset_remote_lasvsim(self):
-        return self.simulator.reset(reset_traffic_flow=True)
+    def reset_remote_lasvsim(self, reset_traffic_flow: bool = False):
+        return self.simulator.reset(reset_traffic_flow)
 
     def step_remote_lasvsim(self):
         return self.simulator.step()
