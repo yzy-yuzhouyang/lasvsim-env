@@ -428,7 +428,7 @@ class LasvsimEnv():
         # if terminated or truncated:
         #     print(f"alive step: {self.alive_step}, done info: {[event for event in done_info if done_info[event]]}")
         
-        return obs, reward, terminated, truncated, {**rew_info, **done_info, "event_alive_step": self.alive_step}
+        return obs, reward, terminated, truncated, {**rew_info, **done_info, "event_alive_step": self.alive_step, "event_qx_error": 0}
 
     def reset(self, reset_traffic_flow: bool = False):
         test_vehicle_list = []
@@ -711,11 +711,8 @@ class LasvsimEnv():
         ego = self.lasvsim_context.ego
         # cal reference_closest
         ref_list = self.lasvsim_context.ref_list
-        # try:
         closest_idx = np.argmin([ref_line.distance(ego.polygon)
                                     for ref_line in ref_list])
-        # except Exception as e:
-            # breakpoint()
         reference_closest = ref_list[closest_idx]
         # tracking_error cost
         position_on_ref = point_project_to_line(
