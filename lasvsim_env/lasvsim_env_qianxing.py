@@ -58,26 +58,32 @@ class LasvsimEnv():
         env_config: Dict = {},
         task_id=None,
         is_testing: bool = False,
+        server_host: str = "",
         **kwargs: Any,
     ):
         assert task_id is not None, "None task id"
 
         # ================== 1. Build a connection ==================
-        endpoint = kwargs['server_host']
-        assert endpoint == "http://localhost:8290", "endpoint should be localhost:8290, please check."
+        assert server_host == "http://localhost:8290", "server_host should be localhost:8290, please check."
         self.qx_client = Client(HttpConfig(
-            endpoint=endpoint,  # 接口地址
+            endpoint=server_host,  # 接口地址
             token=token,  # 授权token
         ))
         if not is_testing: # 训练环境
             scene_list = self.qx_client.train_task.get_scene_id_list(task_id)
-            self.scenario_list = scene_list.scene_id_list
-            self.version_list = scene_list.scene_version_list
-            self.scenario_id = self.scenario_list[0]
+            scenario_list = scene_list.scene_id_list
+            version_list = scene_list.scene_version_list
+
+            random_index = random.randint(0, len(scenario_list) - 1)
+
+            self.scenario_id = scenario_list[random_index]
+            self.scenario_version = version_list[random_index]
+
             self.simulator = self.init_remote_lasvsim(
-                scenario_id=scene_list.scene_id_list[0],
-                scenario_version=scene_list.scene_version_list[0]
+                scenario_id=self.scenario_id,
+                scenario_version=self.scenario_version
             )
+            print(f"randomly select scenario[{random_index}].")
         else: # 测试环境
             print("initializing test environment...")
             record_id = self.qx_client.process_task.get_task_record_ids(task_id).record_ids[0]
@@ -136,12 +142,9 @@ class LasvsimEnv():
         self.lanes = {}
         self.segments = {}
         self.links = {}
-        self.map_dict = {} # scenaio_id -> Qxmap
-        for i in range(len(self.scenario_list)):
-            cur_map = self.get_remote_hdmap(self.scenario_list[i], self.version_list[i])
-            self.map_dict[self.scenario_list[i]] = cur_map
+        self.qx_map = self.get_remote_hdmap(self.scenario_id, self.scenario_version)
 
-        self.convert_map(self.scenario_list[0])
+        self.convert_map(self.qx_map)
         print("len(self.lanes): ", len(self.lanes))
         # 根据self.lanes，将车道中心线转化为self.map_objs
         # 首先将每条车道构造成linestring对象，利用segmentize函数切成小段
@@ -154,67 +157,66 @@ class LasvsimEnv():
         VIRTUAL     = [0, 0, 0, 0, 0, 1]
 
         map_objs = []
-        for key in self.map_dict: # 每张地图
-            for seg in self.map_dict[key].data.segments: # 每个segment
-                for link in seg.ordered_links: # 每个link
-                    # 左右道路边界
-                    linestring = LineString([(p.x, p.y) for p in link.left_boundary.points])
-                    segmentized_linestring = segmentize(linestring, max_segment_length=5.0)
-                    count = add_map_objs(segmentized_linestring, map_objs, max_speed=0.0, obj_type=ROAD_EDGE) # 道路边界线
-                    linestring = LineString([(p.x, p.y) for p in link.right_boundary.points])
-                    segmentized_linestring = segmentize(linestring, max_segment_length=5.0)
-                    count = add_map_objs(segmentized_linestring, map_objs, max_speed=0.0, obj_type=ROAD_EDGE) # 道路边界线
-                    
-                    # 对每个车道
-                    for i, lane in enumerate(link.ordered_lanes):
-                        # print(f"processsing lane {i} "+ lane.id)
-                        if lane.type == 0:
-                            continue
-                        elif lane.type == 1:
-                            # 添加车道中心线
-                            lane_linestring = LineString([(p.point.x, p.point.y) for p in lane.center_line])
-                            segmentized_linestring = segmentize(lane_linestring, max_segment_length=5.0)
-                            count = add_map_objs(segmentized_linestring, map_objs, max_speed=12.0, obj_type=CENTER_LINE)
-                        elif lane.type == 2:
-                            continue
-                        elif lane.type == 3:
-                            continue
+        for seg in self.qx_map.data.segments: # 每个segment
+            for link in seg.ordered_links: # 每个link
+                # 左右道路边界
+                linestring = LineString([(p.x, p.y) for p in link.left_boundary.points])
+                segmentized_linestring = segmentize(linestring, max_segment_length=5.0)
+                count = add_map_objs(segmentized_linestring, map_objs, max_speed=0.0, obj_type=ROAD_EDGE) # 道路边界线
+                linestring = LineString([(p.x, p.y) for p in link.right_boundary.points])
+                segmentized_linestring = segmentize(linestring, max_segment_length=5.0)
+                count = add_map_objs(segmentized_linestring, map_objs, max_speed=0.0, obj_type=ROAD_EDGE) # 道路边界线
+                
+                # 对每个车道
+                for i, lane in enumerate(link.ordered_lanes):
+                    # print(f"processsing lane {i} "+ lane.id)
+                    if lane.type == 0:
+                        continue
+                    elif lane.type == 1:
+                        # 添加车道中心线
+                        lane_linestring = LineString([(p.point.x, p.point.y) for p in lane.center_line])
+                        segmentized_linestring = segmentize(lane_linestring, max_segment_length=5.0)
+                        count = add_map_objs(segmentized_linestring, map_objs, max_speed=12.0, obj_type=CENTER_LINE)
+                    elif lane.type == 2:
+                        continue
+                    elif lane.type == 3:
+                        continue
 
-                        # 添加车道线
-                        if i > 0 and link.ordered_lanes[i-1].type == 0: # 如果是第一条机动车道，则加入左侧车道线
-                            linestring = LineString([(p.point.x - p.left_width * np.sin(p.heading), \
-                                                      p.point.y + p.left_width * np.cos(p.heading)) for p in lane.center_line])
-                            segmentized_linestring = segmentize(linestring, max_segment_length=5.0)
-                            count += add_map_objs(segmentized_linestring, map_objs, max_speed=0.0, obj_type=LINE_EDGE)
-                        
-                        # 其他情况，加入右侧车道线
-                        linestring = LineString([(p.point.x + p.right_width * np.sin(p.heading), \
-                                                  p.point.y - p.right_width * np.cos(p.heading)) for p in lane.center_line])
+                    # 添加车道线
+                    if i > 0 and link.ordered_lanes[i-1].type == 0: # 如果是第一条机动车道，则加入左侧车道线
+                        linestring = LineString([(p.point.x - p.left_width * np.sin(p.heading), \
+                                                    p.point.y + p.left_width * np.cos(p.heading)) for p in lane.center_line])
                         segmentized_linestring = segmentize(linestring, max_segment_length=5.0)
                         count += add_map_objs(segmentized_linestring, map_objs, max_speed=0.0, obj_type=LINE_EDGE)
+                    
+                    # 其他情况，加入右侧车道线
+                    linestring = LineString([(p.point.x + p.right_width * np.sin(p.heading), \
+                                                p.point.y - p.right_width * np.cos(p.heading)) for p in lane.center_line])
+                    segmentized_linestring = segmentize(linestring, max_segment_length=5.0)
+                    count += add_map_objs(segmentized_linestring, map_objs, max_speed=0.0, obj_type=LINE_EDGE)
 
-                        # 停止线
-                        if lane.stopline:
-                            linestring = LineString([(p.x, p.y) for p in lane.stopline.shape.points])
-                            segmentized_linestring = segmentize(linestring, max_segment_length=5.0)
-                            count += add_map_objs(segmentized_linestring, map_objs, max_speed=0.0, obj_type=STOP_LINE)
-                        
-                        # print(f"finish adding lane {lane.id} with {count} vectors.")
-            
-            for junc in self.map_dict[key].data.junctions: # 每个junction
-                pass #TODO: 添加人行道、连接线
+                    # 停止线
+                    if lane.stopline:
+                        linestring = LineString([(p.x, p.y) for p in lane.stopline.shape.points])
+                        segmentized_linestring = segmentize(linestring, max_segment_length=5.0)
+                        count += add_map_objs(segmentized_linestring, map_objs, max_speed=0.0, obj_type=STOP_LINE)
+                    
+                    # print(f"finish adding lane {lane.id} with {count} vectors.")
+        
+        for junc in self.qx_map.data.junctions: # 每个junction
+            pass #TODO: 添加人行道、连接线、停止线等
 
 
         # 每个小段是一个vector，将这些信息按照观测形式进行保存，得到self.map_objs
         # self.map_objs是长度为(S, 16)的向量，S表示切出来的vector数量（大约几千）
         # 16维观测的设置按照RL Planner文档，这里的x,y,phi取绝对坐标
         self.map_objs = np.array(map_objs)
-        print(f"finish initializing self.map_objs with shape: {self.map_objs.shape}.")
+        # print(f"finish initializing self.map_objs with shape: {self.map_objs.shape}.")
         
         self.surrounding_deque=deque([[] for _ in range(10)], maxlen=10)
 
     def init_remote_lasvsim(self, scenario_id: str, scenario_version: str):
-        print(f"[LasvsimEnv] init_remote_lasvim with scenario_id={scenario_id} and version={scenario_version}...")
+        # print(f"[LasvsimEnv] init_remote_lasvim with scenario_id={scenario_id} and version={scenario_version}...")
         return self.qx_client.init_simulator_from_config(SimulatorConfig(
             scen_id=scenario_id,
             scen_ver=scenario_version,
@@ -444,17 +446,14 @@ class LasvsimEnv():
         else:
             while len(test_vehicle_list) == 0:
                 self.stop_remote_lasvsim()
-                idx = random.randint(0, len(self.scenario_list) - 1)
-                self.scenario_id = self.scenario_list[idx]
                 self.simulator = self.init_remote_lasvsim(
                     scenario_id=self.scenario_id,
-                    scenario_version=self.version_list[idx]
+                    scenario_version=self.scenario_version
                 )
                 self.step_remote_lasvsim()
                 test_vehicle = self.get_remote_lasvsim_test_veh_list()
                 if (test_vehicle is not None):
                     test_vehicle_list = test_vehicle.list
-                self.convert_map(self.scenario_list[idx])
             self.scenario_cnt = 0
 
         self.ego_id = test_vehicle_list[0]
@@ -959,7 +958,7 @@ class LasvsimEnv():
         terminated = collision or out_of_defined_region or out_of_driving_area
         truncated = max_step_truncated or success
         
-        # if done:
+        # if terminated or truncated:
         #     print(f"# DONE: {done_info}")
 
         return terminated, truncated, done_info
@@ -1135,15 +1134,14 @@ class LasvsimEnv():
         #                    for _ in range(self.surr_veh_num - len(sur_context)))
         return sur_context
 
-    def convert_map(self, scenario_id: str):
+    def convert_map(self, qx_map):
         link_nav = self.get_ego_navigation_info()
-        print(f"link_nav: {link_nav}")
-        traffic_map = self.map_dict[scenario_id]
-        for segment in traffic_map.data.segments:
+        # print(f"link_nav: {link_nav}")
+        for segment in qx_map.data.segments:
             for link in segment.ordered_links:
-                print(f"processing {link.id}.")
+                # print(f"processing {link.id}.")
                 if not link.id in link_nav:
-                    print(f"link {link.id} is not in {link_nav}, not adding lanes. continue.")
+                    # print(f"link {link.id} is not in {link_nav}, not adding lanes. continue.")
                     continue
                 for lane in link.ordered_lanes:
                     # print("lane: ", lane)
