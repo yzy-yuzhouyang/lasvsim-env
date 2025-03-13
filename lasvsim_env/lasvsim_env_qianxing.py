@@ -88,16 +88,15 @@ class LasvsimEnv():
             print("initializing test environment...")
             record_id = self.qx_client.process_task.get_task_record_ids(task_id).record_ids[0]
             new_record = self.qx_client.process_task.copy_record(task_id, record_id)
-            self.scenario_list = [new_record.scen_id]
-            self.version_list = [new_record.scen_ver]
+            
             self.scenario_id = new_record.scen_id
-            self.simulator = self.qx_client.init_simulator_from_config(
-                                SimulatorConfig(
-                                    scen_id=new_record.scen_id,
-                                    scen_ver=new_record.scen_ver,
-                                    sim_record_id=new_record.sim_record_id,
-                                )
-            )
+            self.scenario_version = new_record.scen_ver
+            
+            self.simulator = self.qx_client.init_simulator_from_config(SimulatorConfig(
+                scen_id=new_record.scen_id,
+                scen_ver=new_record.scen_ver,
+                sim_record_id=new_record.sim_record_id,
+            ))
             print("New record id: ", new_record.new_record_id)
             
       
