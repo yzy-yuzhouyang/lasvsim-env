@@ -118,8 +118,8 @@ class LasvsimEnv():
         self.real_action_lower = np.array(
             self.config["real_action_lower_bound"])
 
-        self.max_num_map_observed = self.config['obs_dict']['max_num_map_observed']
-        self.surr_veh_num = self.config['obs_dict']['max_num_agents_observed']
+        self.map_vec_num = self.config['obs_dict']['map_vec_num']
+        self.sur_num = self.config['obs_dict']['sur_num']
         
         # init ego vehicle
         test_vehicle = self.get_remote_lasvsim_test_veh_list()
@@ -369,8 +369,8 @@ class LasvsimEnv():
         # Calculate distances to ego center
         distances = np.sqrt(np.sum((obj_centers - ego_center) ** 2, axis=1))
 
-        # Use partition to find indices of self.max_num_map_observed nearest objects 
-        selected_indices = np.argpartition(distances, self.max_num_map_observed)[:self.max_num_map_observed]
+        # Use partition to find indices of self.map_vec_num nearest objects 
+        selected_indices = np.argpartition(distances, self.map_vec_num)[:self.map_vec_num]
         sorted_indices = selected_indices[np.argsort(distances[selected_indices])]
         selected_objs = self.map_objs[sorted_indices]
         
@@ -1123,8 +1123,8 @@ class LasvsimEnv():
         ]
 
         # sort out the smallest k distance vehicles
-        if (len(distances) > self.surr_veh_num):
-            indices = get_indices_of_k_smallest(distances, self.surr_veh_num)
+        if (len(distances) > self.sur_num):
+            indices = get_indices_of_k_smallest(distances, self.sur_num)
         else:
             indices = range(len(distances))
 
@@ -1158,7 +1158,7 @@ class LasvsimEnv():
             sur_context.append(sur_vehicle)
 
         # sur_context.extend(SurroundingVehicle()
-        #                    for _ in range(self.surr_veh_num - len(sur_context)))
+        #                    for _ in range(self.sur_num - len(sur_context)))
         return sur_context
 
     def convert_map(self, qx_map):
