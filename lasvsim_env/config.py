@@ -31,12 +31,11 @@ env_config_multilane = {
     # obs config
     "obs_dict": {
         "ego": 5,
-        "single_partner": 11,
-        "single_road_point": 16,
-        "history_length": 10,
-        "partner":1100,
-        "max_num_agents_observed": 10,
-        "max_num_map_observed": 200,
+        "sur_dim": 11,
+        "sur_num": 10,
+        "sur_history_length": 10,
+        "map_vec_dim": 16,
+        "map_vec_num": 200,
         "navi": 0,
     },
 
