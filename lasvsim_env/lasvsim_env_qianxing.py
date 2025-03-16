@@ -137,16 +137,12 @@ class LasvsimEnv():
         # self._render_init(render_info=render_info)
 
         # ================== 3. Process static map, surroundings and render ==================
-        self.connections = {}
-        self.junctions = {}
-        self.lanes = {}
-        self.segments = {}
-        self.links = {}
+        self.lane_nav = {}
         self.qx_map = self.get_remote_hdmap(self.scenario_id, self.scenario_version)
 
         self.convert_map(self.qx_map)
-        print("len(self.lanes): ", len(self.lanes))
-        # 根据self.lanes，将车道中心线转化为self.map_objs
+        print("len(self.lane_nav): ", len(self.lane_nav))
+        # 根据self.lane_nav，将车道中心线转化为self.map_objs
         # 首先将每条车道构造成linestring对象，利用segmentize函数切成小段
         
         ROAD_EDGE   = [1, 0, 0, 0, 0, 0]
@@ -165,7 +161,7 @@ class LasvsimEnv():
                 count = add_map_objs(segmentized_linestring, map_objs, max_speed=0.0, obj_type=ROAD_EDGE) # 道路边界线
                 linestring = LineString([(p.x, p.y) for p in link.right_boundary.points])
                 segmentized_linestring = segmentize(linestring, max_segment_length=5.0)
-                count = add_map_objs(segmentized_linestring, map_objs, max_speed=0.0, obj_type=ROAD_EDGE) # 道路边界线
+                count += add_map_objs(segmentized_linestring, map_objs, max_speed=0.0, obj_type=ROAD_EDGE) # 道路边界线
                 
                 # 对每个车道
                 for i, lane in enumerate(link.ordered_lanes):
@@ -176,7 +172,7 @@ class LasvsimEnv():
                         # 添加车道中心线
                         lane_linestring = LineString([(p.point.x, p.point.y) for p in lane.center_line])
                         segmentized_linestring = segmentize(lane_linestring, max_segment_length=5.0)
-                        count = add_map_objs(segmentized_linestring, map_objs, max_speed=12.0, obj_type=CENTER_LINE)
+                        count += add_map_objs(segmentized_linestring, map_objs, max_speed=12.0, obj_type=CENTER_LINE)
                     elif lane.type == 2:
                         continue
                     elif lane.type == 3:
@@ -204,7 +200,39 @@ class LasvsimEnv():
                     # print(f"finish adding lane {lane.id} with {count} vectors.")
         
         for junc in self.qx_map.data.junctions: # 每个junction
-            pass #TODO: 添加人行道、连接线、停止线等
+            if junc.type == 1:
+                continue
+            elif junc.type == 2:
+                # 路口连接线
+                for connection in junc.connections:
+                    # FIXME: adapt to new version of qx
+                    linestring = LineString([(p['x'], p['y']) for p in connection.id["path"]["points"]])
+                    linestring = linestring.simplify(0.2).segmentize(5.0)
+                    count += add_map_objs(linestring, map_objs, max_speed=6.0, obj_type=CENTER_LINE)
+                
+                # 人行道
+                for crosswalk in junc.crosswalks:
+                    xs = np.array([p['x'] for p in crosswalk.id['shape']['points']])
+                    ys = np.array([p['y'] for p in crosswalk.id['shape']['points']])
+                    xys = np.array([(p['x'], p['y']) for p in crosswalk.id['shape']['points']])
+                    a = np.linalg.norm(xys[1] - xys[0])
+                    b = np.linalg.norm(xys[2] - xys[1])
+                    if a > b:
+                        l = a / 2  # always use the longer side as length
+                        w = b / 2
+                        orientation = np.arctan2(ys[1] - ys[0], xs[1] - xs[0])  # use the direction of the longer side
+                    else:
+                        l = b / 2
+                        w = a / 2
+                        orientation = np.arctan2(ys[2] - ys[1], xs[2] - xs[1])
+                    orientation += np.pi if orientation < 0 else 0  # make sure the orientation is in [0, pi)
+                    map_objs.append([
+                        xs.mean(), ys.mean(), l, w, 
+                        np.cos(orientation), np.sin(orientation), 0.0,
+                        *ZEBRA,
+                        0, 0, 1  # default light status
+                    ])
+                    count += 1
 
 
         # 每个小段是一个vector，将这些信息按照观测形式进行保存，得到self.map_objs
@@ -992,7 +1020,7 @@ class LasvsimEnv():
         # assert not in_junction
         self.can_not_get_lane_id = False
         try:
-            target_lane = self.lanes[lane_id]
+            target_lane = self.lane_nav[lane_id]
         except Exception as e:
             # print('X'*50)
             # print('can_not_get_lane_id')
@@ -1060,7 +1088,7 @@ class LasvsimEnv():
         if len(ref_lines)==0:
             if not self.can_not_get_lane_id:
                 lane_id = self.lasvsim_context.ego.lane_id
-                target_lane = self.lanes[lane_id]
+                target_lane = self.lane_nav[lane_id]
                 ref_line_xy = np.array([[p.point.x, p.point.y] for p in target_lane.center_line])
                 ref_line_string = LineString(ref_line_xy)
                 return [ref_line_string] * len(self.lasvsim_context.ref_list)
@@ -1145,7 +1173,7 @@ class LasvsimEnv():
                     continue
                 for lane in link.ordered_lanes:
                     # print("lane: ", lane)
-                    self.lanes[lane.id] = lane
+                    self.lane_nav[lane.id] = lane
 
     def get_real_action(self, delta_action: np.ndarray, last_action: np.ndarray):
         # input normalized increment action, output clipped real action
