@@ -129,7 +129,7 @@ class LasvsimEnv():
             ref_list=[],
             sur_list=[]
         )
-        self.history_sur_veh: Deque = deque([[] for _ in range(10)], maxlen=10)
+        self.history_sur_veh: Deque = deque([[] for _ in range(self.sur_num)], maxlen=self.sur_num)
         self.can_not_get_lane_id = False
         self.step_remote_lasvsim()
         self.update_lasvsim_context()
@@ -365,6 +365,11 @@ class LasvsimEnv():
                                  self.lasvsim_context.ego.y, 
                                  self.lasvsim_context.ego.phi)
         ego_center = np.array([ego_x, ego_y])
+
+        # 将ego_center按照自车速度向前递推2s
+        ego_u = self.lasvsim_context.ego.u
+        ego_center = ego_center + ego_u * np.array([np.cos(ego_phi), np.sin(ego_phi)]) * 2.0
+
         obj_centers = self.map_objs[:, :2]
         # Calculate distances to ego center
         distances = np.sqrt(np.sum((obj_centers - ego_center) ** 2, axis=1))
