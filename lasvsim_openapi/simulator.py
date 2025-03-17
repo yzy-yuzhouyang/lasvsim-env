@@ -97,6 +97,7 @@ from lasvsim_openapi.simulator_model import (
     LocalPath,
     SetVehicleLocalPathsRes,
     GetIdcVehicleNavRes,
+    IdcStepRes,
 )
 
 
@@ -174,7 +175,7 @@ class Simulator:
             InitRes,
         )
 
-        self.init_from_sim(reply.simulation_id, reply.simulation_addr)
+        self.init_from_sim(reply['simulation_id'], reply['simulation_addr'])
 
     def init_from_sim(self, sim_id: str, sim_addr: str):
         """Initialize simulator from existing simulation.
@@ -462,7 +463,14 @@ class Simulator:
             {"simulation_id": self.simulation_id, "vehicle_id": vehicle_id},
             GetVehicleReferenceLinesRes,
         )
-
+    
+    def get_vehicle_dis_to_link_boundary(self, vehicle_id: str):
+        return self.http_client.post(
+            "/openapi/cosim/v2/simulation//vehicle/dis_to_link_boundary/get",
+            {"simulation_id": self.simulation_id, "vehicle_id": vehicle_id},
+            GetVehicleReferenceLinesRes,# TODO: 
+        )
+    
     def get_vehicle_planning_info(self, vehicle_id: str) -> GetVehiclePlanningInfoRes:
         """Get vehicle planning information.
 
@@ -1061,4 +1069,24 @@ class Simulator:
                 "vehicle_id": vehicle_id,
             },
             GetIdcVehicleNavRes,
+        )
+    
+    def idc_step(
+        self,
+        vehicle_id: str,
+        ste_wheel: Optional[float] = None,
+        lon_acc: Optional[float] = None,
+        ref_limit: Optional[float] = None,
+    ):
+
+        return self.http_client.post(
+            "/openapi/cosim/v2/simulation/idc_step",
+            {
+                "simulation_id": self.simulation_id,
+                "vehicle_id": vehicle_id,
+                "ste_wheel": ste_wheel,
+                "lon_acc": lon_acc,
+                "ref_limit": ref_limit,
+            },
+            IdcStepRes,
         )
