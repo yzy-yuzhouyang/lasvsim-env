@@ -51,6 +51,53 @@ def add_map_objs(line_string, map_objs, max_speed, obj_type):
         count += 1
     return count
 
+def add_connection_objs(connection, map_objs, max_speed, obj_type, id_index_map):
+    """
+    Add segmentized connection line_string to map_objs and store id-to-index mapping.
+    Args:
+        connection: dict.
+        map_objs: list.
+        obj_type: one-hot list, e.g. [0, 0, 1, 0, 0, 0] for center lanes.
+        id_index_map: dict, mapping connection id to indices in map_objs.
+    Returns:
+        count: Number of objects added.
+    """
+    linestring = LineString([(p['x'], p['y']) for p in connection.id["path"]["points"]])
+    linestring = linestring.simplify(0.2).segmentize(5.0)
+    
+    default_light_status = [0, 0, 1]  # 默认交通灯（无灯）
+    
+    xs = np.array(linestring.xy[0]).astype(np.float32)
+    ys = np.array(linestring.xy[1]).astype(np.float32)
+    xys = np.array([xs, ys]).T
+    map_obj_xs = (xs[:-1] + xs[1:]) / 2
+    map_obj_ys = (ys[:-1] + ys[1:]) / 2
+    lengths = np.linalg.norm(xys[1:] - xys[:-1], axis=1) / 2
+    orientations = np.arctan2(ys[1:] - ys[:-1], xs[1:] - xs[:-1])
+    
+    start_idx = len(map_objs)
+    count = 0
+    
+    for x, y, l, o in zip(map_obj_xs, map_obj_ys, lengths, orientations):
+        map_objs.append([
+            x, y, l, 0, 
+            np.cos(o), np.sin(o), max_speed,
+            *obj_type,
+            *default_light_status
+        ])
+        count += 1
+    
+    if connection.id["movement_id"] in id_index_map.keys():
+        id_index_map[connection.id["movement_id"]].extend(list(range(start_idx, start_idx + count)))
+    else:
+        id_index_map[connection.id["movement_id"]] = list(range(start_idx, start_idx + count))
+    # movement_id = connection.id["movement_id"]
+    # id_index_map = {idx: movement_id for idx in range(start_idx, start_idx + count)}
+    
+    return count
+
+
+
 class LasvsimEnv():
     def __init__(
         self,
@@ -131,6 +178,10 @@ class LasvsimEnv():
         )
         self.history_sur_veh: Deque = deque([[] for _ in range(self.sur_num)], maxlen=self.sur_num)
         self.can_not_get_lane_id = False
+
+        # connection id to index mapping
+        self.id_index_map = {}
+
         self.step_remote_lasvsim()
         self.update_lasvsim_context()
         # self._render_init(render_info=render_info)
@@ -207,7 +258,8 @@ class LasvsimEnv():
                     # FIXME: adapt to new version of qx
                     linestring = LineString([(p['x'], p['y']) for p in connection.id["path"]["points"]])
                     linestring = linestring.simplify(0.2).segmentize(5.0)
-                    count += add_map_objs(linestring, map_objs, max_speed=6.0, obj_type=CENTER_LINE)
+                    count += add_connection_objs(connection, map_objs, max_speed=6.0, obj_type=CENTER_LINE, id_index_map=self.id_index_map)
+                    # count += add_map_objs(linestring, map_objs, max_speed=6.0, obj_type=CENTER_LINE)
                 
                 # 人行道
                 for crosswalk in junc.crosswalks:
@@ -377,6 +429,9 @@ class LasvsimEnv():
         # Use partition to find indices of self.map_vec_num nearest objects 
         selected_indices = np.argpartition(distances, self.map_vec_num)[:self.map_vec_num]
         sorted_indices = selected_indices[np.argsort(distances[selected_indices])]
+        # update light status for map objs
+        self.update_light_status()
+        # Select the updated objects           
         selected_objs = self.map_objs[sorted_indices]
         
         cos_tf = np.cos(-ego_phi)
@@ -1228,3 +1283,25 @@ class LasvsimEnv():
 
     def get_remote_lasvsim_perception_info(self):
         return self.simulator.get_vehicle_perception_info(self.ego_id)
+    
+    def update_light_status(self):
+        """
+        更新 self.map_objs 中的信号灯状态。
+        """
+        # 获取 movement_id
+        vehicle_navigation = self.simulator.get_idc_vehicle_nav(self.ego_id)
+        movement_id = vehicle_navigation.next_movement_id
+        
+        # 偏离路口就没有movement_id
+        if movement_id is not None and movement_id != "":
+            # 获取信号灯状态
+            light_status = self.simulator.get_movement_signal(movement_id).current_signal
+
+            # 根据 light_status 设置对应的 one-hot 向量
+            one_hot_vector = [1, 0, 0] if light_status == 2 else [0, 1, 0] if light_status == 1 else [0, 0, 1]
+
+            # 查找 id_index_map 中的对应索引并更新信号灯状态
+            if movement_id in self.id_index_map:
+                indices = self.id_index_map[movement_id]  # 获取所有与 movement_id 相关的索引
+                for idx in indices:
+                    self.map_objs[idx][13:16] = one_hot_vector  # 14 到 16 维存储信号灯状态
