@@ -1104,11 +1104,11 @@ class LasvsimEnv():
         left_boundary_distance = self.bound_info["left"]
         right_boundary_distance = self.bound_info["right"]
 
-        if left_boundary_distance < 0 or left_boundary_distance > 20.0:
+        if left_boundary_distance < -1 or left_boundary_distance > 100.0:
             print("[Warning] left_boundary_distance: ", left_boundary_distance)
             # left_boundary_distance = 20.0
             # raise ValueError(f"left_boundary_distance: {left_boundary_distance}")
-        if right_boundary_distance < 0 or right_boundary_distance > 20.0:
+        if right_boundary_distance < -1 or right_boundary_distance > 100.0:
             print("[Warning] right_boundary_distance: ", right_boundary_distance)
             # right_boundary_distance = 20.0
             # raise ValueError(f"right_boundary_distance: {right_boundary_distance}")
