@@ -1135,8 +1135,8 @@ class LasvsimEnv():
 
         # update traffic light
         vehicle_navigation = self.simulator.get_idc_vehicle_nav(self.ego_id)
-        movement_id = vehicle_navigation.next_movement_id
-        dis_to_next_junction = vehicle_navigation.dis_to_next_junction
+        movement_id = vehicle_navigation["next_movement_id"]
+        dis_to_next_junction = vehicle_navigation["dis_to_next_junction"]
 
         # 偏离路口就没有movement_id
         traffic_light = "unknown"
@@ -1144,7 +1144,7 @@ class LasvsimEnv():
             dis_to_next_junction = 200
         if movement_id is not None and movement_id != "":
             # 0:无信号灯或信号灯损坏 | 1:红灯 | 2:绿灯 | 3:黄灯
-            light_status = self.simulator.get_movement_signal(movement_id).current_signal
+            light_status = self.simulator.get_movement_signal(movement_id)["current_signal"]
             if light_status == 0:
                 traffic_light = "unknown"
             elif light_status == 1:
