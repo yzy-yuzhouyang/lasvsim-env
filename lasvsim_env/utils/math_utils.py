@@ -81,3 +81,27 @@ def cal_curvature(x1, y1, x2, y2, x3, y3):
            (y3[i] - y1[i]) + x3[i] * (y1[i] - y2[i])
     k[i] = 2 * area / (a[i] * b[i] * c[i])
     return k
+
+def ego_predict_model(ego_state: np.ndarray,
+                      action: np.ndarray,
+                      Ts: float,
+                      vehicle_spec: tuple) -> np.ndarray:
+    # parameters
+    m, Iz, lf, lr, Cf, Cr, vx_max, vx_min = vehicle_spec
+    x, y, vx, vy, phi, omega = ego_state
+    ax, steer = action
+
+    return np.array([
+        x + Ts * (vx * np.cos(phi) - vy * np.sin(phi)),
+        y + Ts * (vy * np.cos(phi) + vx * np.sin(phi)),
+        np.clip(vx + Ts * ax, vx_min, vx_max),
+        (-(lf * Cf - lr * Cr) * omega + Cf * steer * vx + m * omega * vx * vx - m * vx * vy / Ts) / (Cf + Cr - m * vx / Ts),
+        phi + Ts * omega,
+        (-Iz * omega * vx / Ts - (lf * Cf - lr * Cr) * vy + lf * Cf * steer * vx) / (
+            (lf * lf * Cf + lr * lr * Cr) - Iz * vx / Ts)
+    ])
+
+def convert_ego_coord_to_ground_coord(rel_x, rel_y, rel_phi, ego_x, ego_y, ego_phi):
+    delta_x, delta_y, phi = rotate(rel_x, rel_y, rel_phi, -ego_phi)
+    x, y = shift(delta_x, delta_y, -ego_x, -ego_y)
+    return x, y, phi
