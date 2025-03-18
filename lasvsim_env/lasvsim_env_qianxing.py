@@ -965,7 +965,7 @@ class LasvsimEnv():
             punish_collision_risk = 0
 
         # exclude scenarios without surrounding vehicles
-        self.active_collision = self.check_collision() and ego_vx > 0.01
+        self.active_collision = self.collision_info and ego_vx > 0.01
 
         # out of driving area cost
         # TODO: boundary cost = 0  when boundary info is not available
@@ -1033,12 +1033,8 @@ class LasvsimEnv():
             "rewardcomp_pun2rear": scaled_pun2rear,
         }
     
-    def check_collision(self) -> bool:
-        return self.simulator.get_vehicle_collision_status(self.ego_id)["collision_status"]
-
     def check_out_of_driving_area(self) -> bool:
-        ego_position = self.get_remote_lasvsim_veh_position()["position_dict"].get(self.ego_id)
-        out_of_driving_area_flag = (ego_position["type"] == 3)
+        out_of_driving_area_flag = (self.pos_info["type"] == 3)
         return out_of_driving_area_flag
 
     def check_traffic_light_violation(self) -> bool:
@@ -1049,7 +1045,7 @@ class LasvsimEnv():
     def judge_done(self, res) -> bool:
         # terminated
         park_flag = (self.lasvsim_context.ego.u == 0)
-        collision = self.check_collision()
+        collision = self.collision_info
         out_of_defined_region = self.out_of_range
         out_of_driving_area = self.out_of_driving_area
         traffic_light_violation = self.traffic_light_violation
