@@ -305,10 +305,6 @@ class LasvsimEnv():
         self.nav_info = None
         self.step_info = None
         self.collision_info = None
-        
-        self.update_step_info(self.simulator.idc_step(self.ego_id, 0, 0,ref_limit=40.0))
-        self.update_lasvsim_context()
-        
 
     def init_remote_lasvsim(self, scenario_id: str, scenario_version: str):
         # print(f"[LasvsimEnv] init_remote_lasvim with scenario_id={scenario_id} and version={scenario_version}...")
