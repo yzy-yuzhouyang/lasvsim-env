@@ -60,6 +60,7 @@ env_config_multilane = {
     "P_collision": 200.0,
     "P_boundary": 0,
     "P_overspeed": 5.0,
+    "P_traffic_light_violation": 200.0,
     "safety_lat_margin_front": 0.3,
     "safety_long_margin_front": 0.0,
     "safety_long_margin_side": 2.0,

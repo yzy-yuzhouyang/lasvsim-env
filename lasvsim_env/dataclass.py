@@ -22,10 +22,13 @@ class EgoVehicle():
     right_boundary_distance: float = 0.0
     segment_id: str = 'default'
     junction_id: str = 'default'
+    movement_id: str = 'default'
     lane_id: str = 'default'
     link_id: str = 'default'
     in_junction: bool = False
     polygon: Polygon = None
+    traffic_light : str = 'default'
+    dis_to_next_junction: float = 200.0
 
     @property
     def ground_position(self) -> Tuple[float, float]:
@@ -101,6 +104,7 @@ class Config:
     P_out_of_map: float = 200.0
     P_collision: float = 200.0
     P_overspeed: float = 5.0
+    P_traffic_light_violation: float = 200.0
 
     safety_lat_margin_front: float = 0.0
     safety_long_margin_front: float = 0.0

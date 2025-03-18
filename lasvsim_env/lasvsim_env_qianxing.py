@@ -995,7 +995,6 @@ class LasvsimEnv():
         scaled_punish_boundary = punish_boundary * self.config["P_boundary"]
 
         # action related reward
-
         reward = - scaled_punish_boundary
 
         punish_collision_risk = punish_collision_risk if (
@@ -1005,8 +1004,11 @@ class LasvsimEnv():
         event_flag = 0  # nomal driving (on lane, stop)
         reward_done = 0
         reward_collision = 0
+        reward_traffic_light_violation = 0
         # Event reward: target reached, collision, out of driving area
-        if self.check_out_of_driving_area() or self.out_of_range:  # out of driving area
+        self.out_of_driving_area = self.check_out_of_driving_area()
+        self.traffic_light_violation = self.check_traffic_light_violation()
+        if self.out_of_driving_area or self.out_of_range:  # out of driving area
             reward_done = - punish_out_of_map
             event_flag = 1
         elif self.active_collision:  # collision by ego vehicle
@@ -1014,11 +1016,12 @@ class LasvsimEnv():
             event_flag = 2
         elif self.braking_mode:  # start to brake
             event_flag = 3
+        elif self.traffic_light_violation:  # traffic light violation
+            reward_traffic_light_violation = - self.config["P_traffic_light_violation"]
+            event_flag = 4
 
-        reward += (reward_done + reward_collision)
+        reward += (reward_done + reward_collision + reward_traffic_light_violation)
 
-        # if vehicle.arrive_success:
-        #     reward += 200.
         return reward, {
             "category": event_flag,
 
@@ -1027,6 +1030,7 @@ class LasvsimEnv():
             "reward_boundary": - scaled_punish_boundary,
             "reward_collision": reward_collision,
             "reward_collision_risk": - punish_collision_risk,
+            "reward_traffic_light_violation": reward_traffic_light_violation,
             "rewardcomp_pun2front": scaled_pun2front,
             "rewardcomp_pun2side": scaled_pun2side,
             "rewardcomp_pun2space": scaled_pun2space,
@@ -1041,12 +1045,18 @@ class LasvsimEnv():
         out_of_driving_area_flag = (ego_position["type"] == 3)
         return out_of_driving_area_flag
 
+    def check_traffic_light_violation(self) -> bool:
+        return (self.lasvsim_context.ego.traffic_light == "red" or \
+                self.lasvsim_context.ego.traffic_light == "yellow") \
+            and self.lasvsim_context.ego.dis_to_next_junction < 10
+
     def judge_done(self, res) -> bool:
         # terminated
         park_flag = (self.lasvsim_context.ego.u == 0)
         collision = self.check_collision()
         out_of_defined_region = self.out_of_range
-        out_of_driving_area = self.check_out_of_driving_area()
+        out_of_driving_area = self.out_of_driving_area
+        traffic_light_violation = self.traffic_light_violation
 
         # truncated
         max_step_truncated = (self.alive_step >= self.max_step)
@@ -1058,6 +1068,7 @@ class LasvsimEnv():
             "event_regionout": out_of_defined_region,
             "event_mapout": out_of_driving_area,
             "event_max_step_truncated": max_step_truncated,
+            "event_traffic_light_violation": traffic_light_violation,
             "event_success": success,
         }
 
@@ -1122,18 +1133,43 @@ class LasvsimEnv():
         state = np.array([x, y, u, v, phi, w])
         last_action = self.lasvsim_context.ego.action
 
+        # update traffic light
+        vehicle_navigation = self.simulator.get_idc_vehicle_nav(self.ego_id)
+        movement_id = vehicle_navigation.next_movement_id
+        dis_to_next_junction = vehicle_navigation.dis_to_next_junction
+
+        # 偏离路口就没有movement_id
+        traffic_light = "unknown"
+        if dis_to_next_junction is None:
+            dis_to_next_junction = 200
+        if movement_id is not None and movement_id != "":
+            # 0:无信号灯或信号灯损坏 | 1:红灯 | 2:绿灯 | 3:黄灯
+            light_status = self.simulator.get_movement_signal(movement_id).current_signal
+            if light_status == 0:
+                traffic_light = "unknown"
+            elif light_status == 1:
+                traffic_light = "red"
+            elif light_status == 2:
+                traffic_light = "green"
+            elif light_status == 3:
+                traffic_light = "yellow"
+            else:
+                raise ValueError(f"Invalid light status: {light_status}")
+
         return EgoVehicle(
             x=x, y=y, phi=phi, u=u, v=v, w=w,
             length=self.ego_length, width=self.ego_width,
             action=action,
             state=state,
             last_action=last_action,
-            junction_id=junction_id, lane_id=lane_id,
+            junction_id=junction_id, lane_id=lane_id, movement_id=movement_id,
             link_id=link_id, segment_id=segment_id,
             in_junction=in_junction,
             left_boundary_distance=left_boundary_distance,
             right_boundary_distance=right_boundary_distance,
-            polygon=polygon
+            polygon=polygon,
+            traffic_light=traffic_light,
+            dis_to_next_junction=dis_to_next_junction
         )
 
     def get_ref_context(self):
@@ -1284,11 +1320,9 @@ class LasvsimEnv():
         """
         更新 self.map_objs 中的信号灯状态。
         """
-        # 获取 movement_id
-        vehicle_navigation = self.simulator.get_idc_vehicle_nav(self.ego_id)
-        movement_id = vehicle_navigation["next_movement_id"]
-        
         # 偏离路口就没有movement_id
+        movement_id = self.lasvsim_context.ego.movement_id
+
         if movement_id is not None and movement_id != "":
             # 获取信号灯状态
             light_status = self.simulator.get_movement_signal(movement_id)["current_signal"]
