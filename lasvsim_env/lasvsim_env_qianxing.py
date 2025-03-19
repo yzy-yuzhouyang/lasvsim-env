@@ -1001,6 +1001,7 @@ class LasvsimEnv():
         reward_done = 0
         reward_collision = 0
         reward_traffic_light_violation = 0
+        reward_navigation_violation = 0
         # Event reward: target reached, collision, out of driving area
         self.out_of_driving_area = self.check_out_of_driving_area()
         self.traffic_light_violation = self.check_traffic_light_violation()
@@ -1015,8 +1016,11 @@ class LasvsimEnv():
         elif self.traffic_light_violation:  # traffic light violation
             reward_traffic_light_violation = - self.config["P_traffic_light_violation"]
             event_flag = 4
+        elif self.navigation_violation:
+            reward_navigation_violation = - punish_out_of_map # use the same reward as out of map
+            event_flag = 5
 
-        reward += (reward_done + reward_collision + reward_traffic_light_violation)
+        reward += (reward_done + reward_collision + reward_traffic_light_violation + reward_navigation_violation)
 
         return reward, {
             "category": event_flag,
@@ -1049,6 +1053,7 @@ class LasvsimEnv():
         out_of_defined_region = self.out_of_range
         out_of_driving_area = self.out_of_driving_area
         traffic_light_violation = self.traffic_light_violation
+        navagation_violation = self.navigation_violation
 
         # truncated
         max_step_truncated = (self.alive_step >= self.max_step)
@@ -1061,10 +1066,11 @@ class LasvsimEnv():
             "event_mapout": out_of_driving_area,
             "event_max_step_truncated": max_step_truncated,
             "event_traffic_light_violation": traffic_light_violation,
+            "event_navigation_violation": navagation_violation,
             "event_success": success,
         }
 
-        terminated = collision or out_of_defined_region or out_of_driving_area
+        terminated = collision or out_of_defined_region or out_of_driving_area or traffic_light_violation or navagation_violation
         truncated = max_step_truncated or success
         
         # if terminated or truncated:
@@ -1096,13 +1102,18 @@ class LasvsimEnv():
 
         # assert not in_junction
         self.can_not_get_lane_id = False
-        try:
-            target_lane = self.lane_nav[lane_id]
-        except Exception as e:
+        self.navigation_violation = False
+
+        if ego_pos == 1: # on lane
+            if lane_id not in self.lane_nav:
+                self.navigation_violation = True
+                self.can_not_get_lane_id = True
+                print(f"lane_id: {lane_id} not in lane_nav")
+        else:
+            self.can_not_get_lane_id = True
             # print('X'*50)
             # print('can_not_get_lane_id')
             # breakpoint()
-            self.can_not_get_lane_id = True
         
         left_boundary_distance = self.bound_info["left"]
         right_boundary_distance = self.bound_info["right"]
