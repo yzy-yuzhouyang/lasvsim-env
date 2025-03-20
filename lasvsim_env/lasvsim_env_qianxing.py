@@ -149,7 +149,16 @@ class LasvsimEnv():
             print(f"randomly select scenario[{random_index}].")
         else: # 测试环境
             print("initializing test environment...")
-            record_id = self.qx_client.process_task.get_task_record_ids(task_id)["record_ids"][0]
+            record_ids = self.qx_client.process_task.get_task_record_ids(task_id)["record_ids"]
+            scen_ids = [self.qx_client.process_task.get_record_scenario(task_id, record_id)["scen_id"] for record_id in record_ids]
+            # remove the duplicated scen_id, and get the index of the non-duplicated scenarios in the original list
+            unique_scen_ids, unique_scen_indices = np.unique(scen_ids, return_index=True)
+            # randomly select one scenario
+            random_index = random.randint(0, len(unique_scen_indices) - 1)
+            print(f"randomly select scenario: {unique_scen_ids[random_index]}.")
+            unique_scen_indice = unique_scen_indices[random_index]
+            
+            record_id = self.qx_client.process_task.get_task_record_ids(task_id)["record_ids"][unique_scen_indice]
             new_record = self.qx_client.process_task.copy_record(task_id, record_id)
             
             self.scenario_id = new_record["scen_id"]
@@ -1094,11 +1103,13 @@ class LasvsimEnv():
         out_of_defined_region = self.out_of_range
         out_of_driving_area = self.out_of_driving_area
         traffic_light_violation = self.traffic_light_violation
-        navagation_violation = self.navigation_violation
+        navigation_violation = self.navigation_violation
 
         # truncated
         max_step_truncated = (self.alive_step >= self.max_step)
         success = (res["code"] == 1001) and (collision == 0)
+        if res["code"] == 1001 and collision == 1:
+            raise ValueError("Success and collision at the same time")
 
         done_info = {
             "event_pause": park_flag,
@@ -1107,12 +1118,12 @@ class LasvsimEnv():
             "event_mapout": out_of_driving_area,
             "event_max_step_truncated": max_step_truncated,
             "event_traffic_light_violation": traffic_light_violation,
-            "event_navigation_violation": navagation_violation,
+            "event_navigation_violation": navigation_violation,
             "event_success": success,
         }
 
-        terminated = collision or out_of_defined_region or out_of_driving_area or traffic_light_violation or navagation_violation
-        truncated = max_step_truncated or success
+        terminated = collision or out_of_defined_region or out_of_driving_area or traffic_light_violation or navigation_violation
+        truncated = max_step_truncated or success # the success sample will be removed from the replay buffer due to plan setting
         
         # if terminated or truncated:
         #     print(f"# DONE: {done_info}")
@@ -1149,7 +1160,7 @@ class LasvsimEnv():
             if lane_id not in self.lane_nav:
                 self.navigation_violation = True
                 self.can_not_get_lane_id = True
-                print(f"lane_id: {lane_id} not in lane_nav")
+                # print(f"lane_id: {lane_id} not in lane_nav")
         else:
             self.can_not_get_lane_id = True
             # print('X'*50)
