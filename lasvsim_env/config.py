@@ -36,7 +36,7 @@ env_config_multilane = {
         "sur_history_length": 10,
         "map_vec_dim": 16,
         "map_vec_num": 200,
-        "navi": 0,
+        "navi": 6,
     },
 
     #  reward config

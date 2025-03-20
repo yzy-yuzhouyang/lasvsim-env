@@ -94,7 +94,26 @@ def add_connection_objs(connection, map_objs, max_speed, obj_type, id_index_map)
     
     return count
 
+NAVI_UNKNOWN  = np.array([1, 0, 0, 0, 0])
+NAVI_STRAIGHT = np.array([0, 1, 0, 0, 0])
+NAVI_LEFT     = np.array([0, 0, 1, 0, 0])
+NAVI_RIGHT    = np.array([0, 0, 0, 1, 0])
+NAVI_UTURN    = np.array([0, 0, 0, 0, 1])
 
+def get_nav_obs_by_flow_direction(flow_direction):
+    if flow_direction == 0:
+        return NAVI_UNKNOWN
+    elif flow_direction == 1:
+        return NAVI_STRAIGHT
+    elif flow_direction == 2:
+        return NAVI_LEFT
+    elif flow_direction == 3:
+        return NAVI_RIGHT
+    elif flow_direction == 4:
+        return NAVI_UTURN
+    else:
+        print(f"Error: unknown flow direction: {flow_direction}")
+        return NAVI_UNKNOWN
 
 class LasvsimEnv():
     def __init__(
@@ -168,6 +187,11 @@ class LasvsimEnv():
         self.sur_dim = self.config['obs_dict']['sur_dim'] # 11: x, y, cosphi, sinphi, speed, length, width, type(4)
         self.map_vec_num = self.config['obs_dict']['map_vec_num']
         self.vec_dim = self.config['obs_dict']['map_vec_dim'] # 16: x, y, length, width, cosphi, sinphi, max_speed, type(6), light(3)
+        self.nav_dim = self.config['obs_dict']['navi']
+        self.obs_dim = (self.ego_dim + 
+                        self.sur_num * self.sur_horizon * self.sur_dim + 
+                        self.map_vec_num * self.vec_dim + 
+                        self.nav_dim)
         
         # init ego vehicle
         test_vehicle = self.get_remote_lasvsim_test_veh_list()
@@ -185,6 +209,7 @@ class LasvsimEnv():
 
         # ================== 3. Process static map, surroundings and render ==================
         self.lane_nav = {}
+        self.movement_id_to_direction = {}
         self.qx_map = self.get_remote_hdmap(self.scenario_id, self.scenario_version)
 
         self.convert_map(self.qx_map)
@@ -253,6 +278,13 @@ class LasvsimEnv():
             if junc["type"] == 1:
                 continue
             elif junc["type"] == 2:
+                # 所有movements
+                for movement in junc.get("movements", {}):
+                    if movement["id"] in self.movement_id_to_direction.keys():
+                        # print(f"Error: duplicated movement id: {movement['id']}")
+                        pass
+                    self.movement_id_to_direction[movement["id"]] = movement["flow_direction"]
+
                 # 路口连接线
                 for connection in junc.get("connections", {}):
                     # FIXME: adapt to new version of qx
@@ -412,20 +444,57 @@ class LasvsimEnv():
         obs = np.zeros(
             self.ego_dim +
             self.sur_num * self.sur_horizon * self.sur_dim +
-            self.map_vec_num * self.vec_dim
+            self.map_vec_num * self.vec_dim +
+            self.nav_dim,
         )
         
-        # -------------- 自车状态更新 -------------- 
+        # -------------- 1.自车观测更新 -------------- 
         obs[0:5] = [self.lasvsim_context.ego.u,
                     self.lasvsim_context.ego.v,
                     self.lasvsim_context.ego.w,
                     self.lasvsim_context.ego.action[0],
                     self.lasvsim_context.ego.action[1]]
         
-        # 地图状态更新
-        # 根据self.lasvsim_context中的自车位置，从self.map_objs中选取出200个距离自车最近的vector
-        # 构成观测的第1105-4304维（共3200维）
-        # 其中，各vector到自车的距离应从小到大排列，即第1个vector距离自车应为最近
+        # -------------- 2.周车观测更新 -------------- 
+        all_sur_veh_obs = np.zeros((self.sur_num, self.sur_horizon, self.sur_dim), dtype=np.float32)
+
+        # latest surrounding vehicles
+        veh_id_list = []
+        for i, sur_veh in enumerate(self.lasvsim_context.sur_list):
+            if i >= self.sur_num: 
+                break
+            veh_id_list.append(sur_veh.veh_id)
+        
+        # assert there is no duplicated element in veh_id_list
+        assert len(veh_id_list) == len(set(veh_id_list))
+        
+        # padding in whole horizon L
+        all_sur_veh_obs[len(veh_id_list):, :, 10] = 1
+
+        # history surrounding vehicles
+        for j in range(self.sur_horizon):
+            for sur_veh in self.history_sur_veh[-1-j]:
+                if sur_veh.veh_id in veh_id_list:
+                    idx = veh_id_list.index(sur_veh.veh_id)
+                    # print(f"in j={j}, idx={idx}, add sur {sur_veh.veh_id}, rel_x: {sur_veh.rel_x:10.2f}, rel_y: {sur_veh.rel_y:10.2f}, rel_phi: {sur_veh.rel_phi:10.2f}")
+                    all_sur_veh_obs[idx, j, :7] = [
+                        sur_veh.rel_x, sur_veh.rel_y, 
+                        np.cos(sur_veh.rel_phi), np.sin(sur_veh.rel_phi),
+                        sur_veh.u, sur_veh.length, sur_veh.width
+                    ]
+                    all_sur_veh_obs[idx, j, 7] = 1
+                    # TODO: 增加行人、自行车
+            # padding
+            all_sur_veh_obs[
+                all_sur_veh_obs[:, j, 7] == 0, # 虚拟周车
+                j,
+                10
+            ] = 1
+        
+        obs[self.ego_dim : self.ego_dim + self.sur_num * self.sur_horizon * self.sur_dim] = all_sur_veh_obs.ravel()
+
+
+        # -------------- 3.地图观测更新 -------------- 
         ego_x, ego_y, ego_phi = (self.lasvsim_context.ego.x, 
                                  self.lasvsim_context.ego.y, 
                                  self.lasvsim_context.ego.phi)
@@ -467,45 +536,17 @@ class LasvsimEnv():
         transformed_objs[:, 4] = cos_phi_ego
         transformed_objs[:, 5] = sin_phi_ego
 
-        obs[self.ego_dim + self.sur_num * self.sur_horizon * self.sur_dim:] = transformed_objs.ravel()
-        
-        # -------------- 周车状态更新 -------------- 
-        all_sur_veh_obs = np.zeros((self.sur_num, self.sur_horizon, self.sur_dim), dtype=np.float32)
+        obs[self.ego_dim + self.sur_num * self.sur_horizon * self.sur_dim:
+            self.obs_dim - self.nav_dim] = transformed_objs.ravel()
 
-        # latest surrounding vehicles
-        veh_id_list = []
-        for i, sur_veh in enumerate(self.lasvsim_context.sur_list):
-            if i >= self.sur_num: 
-                break
-            veh_id_list.append(sur_veh.veh_id)
-        
-        # assert there is no duplicated element in veh_id_list
-        assert len(veh_id_list) == len(set(veh_id_list))
-        
-        # padding in whole horizon L
-        all_sur_veh_obs[len(veh_id_list):, :, 10] = 1
-
-        # history surrounding vehicles
-        for j in range(self.sur_horizon):
-            for sur_veh in self.history_sur_veh[-1-j]:
-                if sur_veh.veh_id in veh_id_list:
-                    idx = veh_id_list.index(sur_veh.veh_id)
-                    all_sur_veh_obs[idx, j, :7] = [
-                        sur_veh.rel_x, sur_veh.rel_y, 
-                        np.cos(sur_veh.rel_phi), np.sin(sur_veh.rel_phi),
-                        sur_veh.u, sur_veh.length, sur_veh.width
-                    ]
-                    all_sur_veh_obs[idx, j, 7] = 1
-                    # TODO: 增加行人、自行车
-            # padding
-            all_sur_veh_obs[
-                all_sur_veh_obs[:, j, 7] == 0, # 虚拟周车
-                j,
-                10
-            ] = 1
-        
-        obs[self.ego_dim : self.ego_dim + self.sur_num * self.sur_horizon * self.sur_dim] = all_sur_veh_obs.ravel()
-        
+        # -------------- 4.导航观测更新 --------------
+        if self.nav_dim > 0:
+            obs[self.obs_dim - self.nav_dim] = np.clip(self.lasvsim_context.ego.dis_to_next_junction, 0, 200) / 200.0
+            movement_id = self.lasvsim_context.ego.movement_id
+            if movement_id is not None and movement_id != "" and movement_id != "default":
+                obs[self.obs_dim - self.nav_dim + 1:] = get_nav_obs_by_flow_direction(self.movement_id_to_direction[movement_id])
+            else:
+                obs[self.obs_dim - self.nav_dim + 1:] = NAVI_UNKNOWN
         return obs
 
     def step(self, delta_action: np.ndarray):
@@ -1145,7 +1186,7 @@ class LasvsimEnv():
         traffic_light = "unknown"
         if dis_to_next_junction is None:
             dis_to_next_junction = 200
-        if movement_id is not None and movement_id != "":
+        if movement_id is not None and movement_id != "" and movement_id != "default":
             # 0:无信号灯或信号灯损坏 | 1:红灯 | 2:绿灯 | 3:黄灯
             light_status = self.simulator.get_movement_signal(movement_id)["current_signal"]
             if light_status == 0:
