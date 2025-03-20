@@ -149,16 +149,7 @@ class LasvsimEnv():
             print(f"randomly select scenario[{random_index}].")
         else: # 测试环境
             print("initializing test environment...")
-            record_ids = self.qx_client.process_task.get_task_record_ids(task_id)["record_ids"]
-            scen_ids = [self.qx_client.process_task.get_record_scenario(task_id, record_id)["scen_id"] for record_id in record_ids]
-            # remove the duplicated scen_id, and get the index of the non-duplicated scenarios in the original list
-            unique_scen_ids, unique_scen_indices = np.unique(scen_ids, return_index=True)
-            # randomly select one scenario
-            random_index = random.randint(0, len(unique_scen_indices) - 1)
-            print(f"randomly select scenario: {unique_scen_ids[random_index]}.")
-            unique_scen_indice = unique_scen_indices[random_index]
-            
-            record_id = self.qx_client.process_task.get_task_record_ids(task_id)["record_ids"][unique_scen_indice]
+            record_id = self.qx_client.process_task.get_task_record_ids(task_id)["record_ids"][0]
             new_record = self.qx_client.process_task.copy_record(task_id, record_id)
             
             self.scenario_id = new_record["scen_id"]
@@ -277,7 +268,7 @@ class LasvsimEnv():
 
                     # 停止线
                     if "stopline" in lane.keys():
-                        linestring = LineString([(p.get("x", 0), p.get("y", 0)) for p in lane["stopline"]["shape"]["points"]])
+                        linestring = LineString([(p["x"], p["y"]) for p in lane["stopline"]["shape"]["points"]])
                         segmentized_linestring = segmentize(linestring, max_segment_length=5.0)
                         count += add_map_objs(segmentized_linestring, map_objs, max_speed=0.0, obj_type=STOP_LINE)
                     
@@ -610,7 +601,7 @@ class LasvsimEnv():
         self.ego_id = test_vehicle_list[0]
 
         # 速度和位置的随机初始化
-        random_init_v = np.random.uniform(10, 14)
+        random_init_v = np.random.uniform(10, 20)
         self.set_ego_speed(random_init_v)
         # 获取自车位置
 
@@ -793,6 +784,8 @@ class LasvsimEnv():
              scaled_reward_acc_long +
              scaled_reward_delta_steer +
              scaled_reward_jerk)
+
+        reward_ego_state = np.clip(reward_ego_state, -5, 30)
 
         rewards = reward_ego_state
         infos = {
@@ -1090,7 +1083,6 @@ class LasvsimEnv():
         return out_of_driving_area_flag
 
     def check_traffic_light_violation(self) -> bool:
-        return False
         return (self.lasvsim_context.ego.traffic_light == "red" or \
                 self.lasvsim_context.ego.traffic_light == "yellow") \
             and self.lasvsim_context.ego.dis_to_next_junction < 10
@@ -1102,13 +1094,11 @@ class LasvsimEnv():
         out_of_defined_region = self.out_of_range
         out_of_driving_area = self.out_of_driving_area
         traffic_light_violation = self.traffic_light_violation
-        navigation_violation = self.navigation_violation
+        navagation_violation = self.navigation_violation
 
         # truncated
         max_step_truncated = (self.alive_step >= self.max_step)
         success = (res["code"] == 1001) and (collision == 0)
-        if res["code"] == 1001 and collision == 1:
-            raise ValueError("Success and collision at the same time")
 
         done_info = {
             "event_pause": park_flag,
@@ -1117,12 +1107,12 @@ class LasvsimEnv():
             "event_mapout": out_of_driving_area,
             "event_max_step_truncated": max_step_truncated,
             "event_traffic_light_violation": traffic_light_violation,
-            "event_navigation_violation": navigation_violation,
+            "event_navigation_violation": navagation_violation,
             "event_success": success,
         }
 
-        terminated = collision or out_of_defined_region or out_of_driving_area or traffic_light_violation or navigation_violation
-        truncated = max_step_truncated or success # the success sample will be removed from the replay buffer due to plan setting
+        terminated = collision or out_of_defined_region or out_of_driving_area or traffic_light_violation or navagation_violation
+        truncated = max_step_truncated or success
         
         # if terminated or truncated:
         #     print(f"# DONE: {done_info}")
@@ -1159,7 +1149,7 @@ class LasvsimEnv():
             if lane_id not in self.lane_nav:
                 self.navigation_violation = True
                 self.can_not_get_lane_id = True
-                # print(f"lane_id: {lane_id} not in lane_nav")
+                print(f"lane_id: {lane_id} not in lane_nav")
         else:
             self.can_not_get_lane_id = True
             # print('X'*50)
@@ -1389,7 +1379,6 @@ class LasvsimEnv():
                 indices = self.id_index_map[movement_id]  # 获取所有与 movement_id 相关的索引
                 for idx in indices:
                     self.map_objs[idx][13:16] = one_hot_vector  # 14 到 16 维存储信号灯状态
-
 
 if __name__ == "__main__":
     from lasvsim_env.config import get_env_config
