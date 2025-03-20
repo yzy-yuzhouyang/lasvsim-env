@@ -51,14 +51,13 @@ def add_map_objs(line_string, map_objs, max_speed, obj_type):
         count += 1
     return count
 
-def add_connection_objs(connection, map_objs, max_speed, obj_type, id_index_map):
+def add_connection_objs(connection, map_objs, max_speed, obj_type):
     """
     Add segmentized connection line_string to map_objs and store id-to-index mapping.
     Args:
         connection: dict.
         map_objs: list.
         obj_type: one-hot list, e.g. [0, 0, 1, 0, 0, 0] for center lanes.
-        id_index_map: dict, mapping connection id to indices in map_objs.
     Returns:
         count: Number of objects added.
     """
@@ -86,12 +85,6 @@ def add_connection_objs(connection, map_objs, max_speed, obj_type, id_index_map)
             *default_light_status
         ])
         count += 1
-    
-    if connection["movement_id"] in id_index_map.keys():
-        id_index_map[connection["movement_id"]].extend(list(range(start_idx, start_idx + count)))
-    else:
-        id_index_map[connection["movement_id"]] = list(range(start_idx, start_idx + count))
-    
     return count
 
 NAVI_UNKNOWN  = np.array([1, 0, 0, 0, 0])
@@ -213,9 +206,6 @@ class LasvsimEnv():
         self.history_sur_veh: Deque = deque([[] for _ in range(self.sur_num)], maxlen=self.sur_num)
         self.can_not_get_lane_id = False
 
-        # connection id to index mapping
-        self.id_index_map = {}
-
         # ================== 3. Process static map, surroundings and render ==================
         self.lane_nav = {}
         self.movement_id_to_direction = {}
@@ -233,7 +223,12 @@ class LasvsimEnv():
         ZEBRA       = [0, 0, 0, 0, 1, 0]
         VIRTUAL     = [0, 0, 0, 0, 0, 1]
 
+        total_count = 0
         map_objs = []
+        linkid2map_obj = {}
+        movementid2map_obj = {}
+        map_objs_in_junction = [] # index of map_objs indicating whether a map_obj belongs to a junction
+        map_objs_is_center_line = [] # index of map_objs indicating whether a map_obj is a center line
         for seg in self.qx_map["data"]["segments"]: # 每个segment
             for link in seg["ordered_links"]: # 每个link
                 # 左右道路边界
@@ -254,7 +249,9 @@ class LasvsimEnv():
                         # 添加车道中心线
                         lane_linestring = LineString([(p["point"]["x"], p["point"]["y"]) for p in lane["center_line"]])
                         segmentized_linestring = segmentize(lane_linestring, max_segment_length=5.0)
-                        count += add_map_objs(segmentized_linestring, map_objs, max_speed=12.0, obj_type=CENTER_LINE)
+                        _count = add_map_objs(segmentized_linestring, map_objs, max_speed=12.0, obj_type=CENTER_LINE)
+                        map_objs_is_center_line.extend(list(range(len(map_objs) - _count, len(map_objs))))
+                        count += _count
                     elif lane_type == 2:
                         continue
                     elif lane_type == 3:
@@ -277,12 +274,16 @@ class LasvsimEnv():
 
                     # 停止线
                     if "stopline" in lane.keys():
-                        linestring = LineString([(p["x"], p["y"]) for p in lane["stopline"]["shape"]["points"]])
+                        linestring = LineString([(p.get("x", 0), p.get("y", 0)) for p in lane["stopline"]["shape"]["points"]])
                         segmentized_linestring = segmentize(linestring, max_segment_length=5.0)
                         count += add_map_objs(segmentized_linestring, map_objs, max_speed=0.0, obj_type=STOP_LINE)
-                    
                     # print(f"finish adding lane {lane.id} with {count} vectors.")
-        
+                if link["id"] in linkid2map_obj.keys():
+                    linkid2map_obj[link["id"]].extend(list(range(len(map_objs) - count, len(map_objs))))
+                else:
+                    linkid2map_obj[link["id"]] = list(range(len(map_objs) - count, len(map_objs)))
+                total_count += count
+
         for junc in self.qx_map["data"]["junctions"]: # 每个junction
             if junc["type"] == 1:
                 continue
@@ -299,7 +300,13 @@ class LasvsimEnv():
                     # FIXME: adapt to new version of qx
                     linestring = LineString([(p['x'], p['y']) for p in connection["path"]["points"]])
                     linestring = linestring.simplify(0.2).segmentize(5.0)
-                    count += add_connection_objs(connection, map_objs, max_speed=6.0, obj_type=CENTER_LINE, id_index_map=self.id_index_map)
+                    count = add_connection_objs(connection, map_objs, max_speed=6.0, obj_type=CENTER_LINE)
+                    if connection["movement_id"] in movementid2map_obj.keys():
+                        movementid2map_obj[connection["movement_id"]].extend(list(range(len(map_objs) - count, len(map_objs))))
+                    else:
+                        movementid2map_obj[connection["movement_id"]] = list(range(len(map_objs) - count, len(map_objs)))
+                    map_objs_in_junction.extend(list(range(len(map_objs) - count, len(map_objs))))
+                    total_count += count
                     # count += add_map_objs(linestring, map_objs, max_speed=6.0, obj_type=CENTER_LINE)
                 
                 # 人行道
@@ -324,13 +331,35 @@ class LasvsimEnv():
                         *ZEBRA,
                         0, 0, 1  # default light status
                     ])
-                    count += 1
+                    total_count += 1
 
 
         # 每个小段是一个vector，将这些信息按照观测形式进行保存，得到self.map_objs
         # self.map_objs是长度为(S, 16)的向量，S表示切出来的vector数量（大约几千）
         # 16维观测的设置按照RL Planner文档，这里的x,y,phi取绝对坐标
+        assert total_count == len(map_objs), f"Error: total_count={total_count}, len(map_objs)={len(map_objs)}"
+        assert len(map_objs_in_junction) == sum([len(idx) for idx in movementid2map_obj.values()]), f"Error: len(map_objs_in_junction)={len(map_objs_in_junction)}, sum([len(movementid2map_obj[m]) for m in movementid2map_obj.keys()])={sum([len(movementid2map_obj[m]) for m in movementid2map_obj.keys()])}"
+
         self.map_objs = np.array(map_objs)
+        map_len = len(self.map_objs)
+
+        self.movementid2map_obj = {}
+        is_movement = np.zeros((len(movementid2map_obj), map_len), dtype=bool)
+        for idx, value in enumerate(movementid2map_obj.values()):
+            is_movement[idx, value] = True
+        self.movementid2map_obj = {key: is_movement[idx] for idx, key in enumerate(movementid2map_obj.keys())}
+
+        self.linkid2map_obj = {}
+        is_link = np.zeros((len(linkid2map_obj), map_len), dtype=bool)
+        for idx, value in enumerate(linkid2map_obj.values()):
+            is_link[idx, value] = True
+        self.linkid2map_obj = {key: is_link[idx] for idx, key in enumerate(linkid2map_obj.keys())}
+        
+        self.map_objs_in_junction = np.zeros(map_len, dtype=bool)
+        self.map_objs_in_junction[map_objs_in_junction] = True
+
+        self.map_objs_is_center_line = np.zeros(map_len, dtype=bool)
+        self.map_objs_is_center_line[map_objs_is_center_line] = True
         # print(f"finish initializing self.map_objs with shape: {self.map_objs.shape}.")
         
         self.surrounding_deque=deque([[] for _ in range(10)], maxlen=10)
