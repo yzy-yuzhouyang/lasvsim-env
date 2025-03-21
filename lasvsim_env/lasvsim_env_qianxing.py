@@ -385,8 +385,8 @@ class LasvsimEnv():
 
     def update_lasvsim_context(self, real_action: np.ndarray = None):
         ego_context = self.get_ego_context(real_action)
-        ref_context = self.get_ref_context()
-        sur_context = self.get_sur_context()
+        ref_context = self.get_ref_context(ego_context)
+        sur_context = self.get_sur_context(ego_context, ref_context)
         
         # Update history_sur_veh
         self.history_sur_veh.append(sur_context)
@@ -1328,11 +1328,13 @@ class LasvsimEnv():
             flow_direction=flow_direction
         )
 
-    def get_ref_context(self):
-        # ref_points = self.get_remote_lasvsim_ref_line()
-        
+    def get_ref_context(self, ego_context):
         ref_lines = self.reference_info
+
         if len(ref_lines)==0:
+            if self.navigation_violation == 0 and self.pos_info["type"] != 3:
+                # raise ValueError("ref_lines is empty, but navigation_violation is False")
+                print("ref_lines is empty, but navigation_violation is False")
             if not self.can_not_get_lane_id:
                 lane_id = self.lasvsim_context.ego.lane_id
                 target_lane = self.lane_nav[lane_id]
@@ -1341,22 +1343,32 @@ class LasvsimEnv():
                 return [ref_line_string] * len(self.lasvsim_context.ref_list)
             else:
                 return self.lasvsim_context.ref_list
+
+        # remove the unnecessary ref lines near junction
+        # Note: the index of the leftmost one is 0, and that of the rightmost one is -1
+        if ego_context.dis_to_next_junction < 20 and ego_context.in_junction == 0:
+            if ego_context.flow_direction == 1: # straight
+                if len(ref_lines) > 3:
+                    ref_lines = ref_lines[1:] # remove the leftmost line
+            elif ego_context.flow_direction == 2 or ego_context.flow_direction == 4: # left or uturn
+                ref_lines = [ref_lines[0]] # only keep the leftmost line
+            elif ego_context.flow_direction == 3: # right
+                ref_lines = [ref_lines[-1]] # only keep the rightmost line
             
-        ref_context = []
-        for ref_line in ref_lines:
-            ref_line_xy = [[point["x"], point["y"]] for point in ref_line["points"]]
-            ref_line_string = LineString(ref_line_xy)
-            ref_context.append(ref_line_string)
-            
+        ref_context = [
+            LineString([[point["x"], point["y"]] for point in ref_line["points"]]) 
+            for ref_line in ref_lines
+        ]
+                    
         return ref_context
 
-    def get_sur_context(self):
+    def get_sur_context(self, ego_context, ref_context):
         # perception_info = self.get_remote_lasvsim_perception_info()
         around_moving_objs = self.perception_info
 
-        ego_x, ego_y, ego_phi = self.lasvsim_context.ego.x, \
-            self.lasvsim_context.ego.y, \
-            self.lasvsim_context.ego.phi
+        ego_x, ego_y, ego_phi = ego_context.x, \
+            ego_context.y, \
+            ego_context.phi
 
         # filter neighbor vehicles for better efficiency
         distances = [
