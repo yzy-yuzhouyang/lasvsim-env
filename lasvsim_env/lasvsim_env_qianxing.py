@@ -542,17 +542,33 @@ class LasvsimEnv():
         ego_u = self.lasvsim_context.ego.u
         ego_center = ego_center + ego_u * np.array([np.cos(ego_phi), np.sin(ego_phi)]) * 2.0
 
-        obj_centers = self.map_objs[:, :2]
-        # Calculate distances to ego center
-        distances = np.sqrt(np.sum((obj_centers - ego_center) ** 2, axis=1))
+        map_objs = self.map_objs.copy()
+        # Update light status for map objs
+        map_objs = self.update_light_status(map_objs)
 
-        # Use partition to find indices of self.map_vec_num nearest objects 
-        selected_indices = np.argpartition(distances, self.map_vec_num)[:self.map_vec_num]
-        sorted_indices = selected_indices[np.argsort(distances[selected_indices])]
-        # update light status for map objs
-        self.update_light_status()
-        # Select the updated objects           
-        selected_objs = self.map_objs[sorted_indices]
+        # Ignore objects in the junction that do not correspond to the current movement_id
+        movement_id = self.lasvsim_context.ego.movement_id
+        if movement_id is not None and movement_id != "":
+            movement_idx = self.movementid2map_obj[movement_id]
+        else:
+            movement_idx = np.zeros_like(self.map_objs_in_junction, dtype=bool)
+        ignore_indices = np.logical_and(self.map_objs_in_junction, ~movement_idx)
+        navi_map_objs = map_objs[~ignore_indices]
+
+        if len(navi_map_objs) < self.map_vec_num:
+            navi_map_objs = np.concatenate([navi_map_objs, np.zeros((self.map_vec_num - len(navi_map_objs), self.vec_dim))], axis=0)
+            # Set mask to 1 for padded objects
+            navi_map_objs[navi_map_objs.shape[0]:, -4] = 1 # FIXME: hard code
+            selected_objs = navi_map_objs
+        else:
+            # Calculate distances to ego center
+            obj_centers = navi_map_objs[:, :2]
+            distances_square = np.sum((obj_centers - ego_center) ** 2, axis=1)
+            # Use partition to find indices of self.map_vec_num nearest objects 
+            selected_indices = np.argpartition(distances_square, self.map_vec_num)[:self.map_vec_num]
+            sorted_indices = selected_indices[np.argsort(distances_square[selected_indices])]
+            # Select the updated objects           
+            selected_objs = navi_map_objs[sorted_indices]
         
         cos_tf = np.cos(-ego_phi)
         sin_tf = np.sin(-ego_phi)
@@ -584,6 +600,45 @@ class LasvsimEnv():
             obs[self.obs_dim - self.nav_dim + 1:] = get_nav_obs_by_flow_direction(flow_direction)
             
         return obs
+
+    def update_light_status(self, map_objs):
+        """
+        更新 self.map_objs 中的信号灯状态。
+        1. 路口中的所有对象的信号灯状态根据实际信号灯状态更新；
+        2. 导航车道中心线的信号灯状态更新为绿灯。
+        """
+        # 偏离路口就没有movement_id
+        movement_id = self.lasvsim_context.ego.movement_id
+
+        if movement_id is not None and movement_id != "" and movement_id != "default":
+            # 获取信号灯状态
+            light_status = self.lasvsim_context.ego.traffic_light
+
+            # 根据 light_status 设置对应的 one-hot 向量
+            if light_status == "green":
+                one_hot_vector = np.array([1, 0, 0]) # 绿灯
+            elif light_status == "red" or light_status == "yellow":
+                one_hot_vector = np.array([0, 1, 0]) # 红灯或黄灯
+            elif light_status == "unknown":
+                one_hot_vector = np.array([0, 0, 1])
+            else:
+                raise ValueError(f"Unknown light status: {light_status}")
+            
+            # 查找 movementid2map_obj 中的对应索引并更新信号灯状态
+            if movement_id in self.movementid2map_obj:
+                movement_idx = self.movementid2map_obj[movement_id]  # 获取所有与 movement_id 相关的索引
+                map_objs[movement_idx, 13:16] = one_hot_vector[np.newaxis, :]  # 14 到 16 维存储信号灯状态
+
+        # self.nav_info
+        for link in self.nav_info["link_nav"]:
+            if link in self.linkid2map_obj:
+                link_idx = self.linkid2map_obj[link]
+                indices = np.logical_and(link_idx, self.map_objs_is_center_line)
+                map_objs[indices, 13:16] = np.array([[1, 0, 0]])
+            else:
+                raise ValueError(f"Error: link {link} not in linkid2map_obj.")
+            
+        return map_objs
             
     def step(self, delta_action: np.ndarray):
         # action: network output, \in [-1, 1]
@@ -1417,25 +1472,6 @@ class LasvsimEnv():
     def get_remote_lasvsim_perception_info(self):
         return self.simulator.get_vehicle_perception_info(self.ego_id)
     
-    def update_light_status(self):
-        """
-        更新 self.map_objs 中的信号灯状态。
-        """
-        # 偏离路口就没有movement_id
-        movement_id = self.lasvsim_context.ego.movement_id
-
-        if movement_id is not None and movement_id != "":
-            # 获取信号灯状态
-            light_status = self.simulator.get_movement_signal(movement_id)["current_signal"]
-
-            # 根据 light_status 设置对应的 one-hot 向量
-            one_hot_vector = [1, 0, 0] if light_status == 2 else [0, 1, 0] if light_status == 1 else [0, 0, 1]
-
-            # 查找 id_index_map 中的对应索引并更新信号灯状态
-            if movement_id in self.id_index_map:
-                indices = self.id_index_map[movement_id]  # 获取所有与 movement_id 相关的索引
-                for idx in indices:
-                    self.map_objs[idx][13:16] = one_hot_vector  # 14 到 16 维存储信号灯状态
 
 if __name__ == "__main__":
     from lasvsim_env.config import get_env_config
