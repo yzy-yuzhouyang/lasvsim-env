@@ -28,7 +28,8 @@ class EgoVehicle():
     in_junction: bool = False
     polygon: Polygon = None
     traffic_light : str = 'default'
-    dis_to_next_junction: float = 200.0
+    dis_to_next_junction: float = 200.0,
+    flow_direction: int = -1 # 0: unknown, 1: straight, 2: left, 3: right, 4: uturn
 
     @property
     def ground_position(self) -> Tuple[float, float]:

@@ -148,10 +148,10 @@ class LasvsimEnv():
             unique_scen_ids, unique_scen_indices = np.unique(scen_ids, return_index=True)
             # randomly select one scenario
             random_index = random.randint(0, len(unique_scen_indices) - 1)
-            print(f"randomly select scenario: {unique_scen_ids[random_index]}.")
             unique_scen_indice = unique_scen_indices[random_index]
-            
-            record_id = self.qx_client.process_task.get_task_record_ids(task_id)["record_ids"][unique_scen_indice]
+            record_id = record_ids[unique_scen_indice]
+            print(f"randomly select scenario: {unique_scen_ids[random_index]}, record_id: {record_id}")
+
             new_record = self.qx_client.process_task.copy_record(task_id, record_id)
             
             self.scenario_id = new_record["scen_id"]
@@ -580,13 +580,11 @@ class LasvsimEnv():
         # -------------- 4.导航观测更新 --------------
         if self.nav_dim > 0:
             obs[self.obs_dim - self.nav_dim] = np.clip(self.lasvsim_context.ego.dis_to_next_junction, 0, 200) / 200.0
-            movement_id = self.lasvsim_context.ego.movement_id
-            if movement_id is not None and movement_id != "" and movement_id != "default":
-                obs[self.obs_dim - self.nav_dim + 1:] = get_nav_obs_by_flow_direction(self.movement_id_to_direction[movement_id])
-            else:
-                obs[self.obs_dim - self.nav_dim + 1:] = NAVI_UNKNOWN
+            flow_direction = self.lasvsim_context.ego.flow_direction
+            obs[self.obs_dim - self.nav_dim + 1:] = get_nav_obs_by_flow_direction(flow_direction)
+            
         return obs
-
+            
     def step(self, delta_action: np.ndarray):
         # action: network output, \in [-1, 1]
         self.alive_step += 1
@@ -1081,9 +1079,12 @@ class LasvsimEnv():
         reward_collision = 0
         reward_traffic_light_violation = 0
         reward_navigation_violation = 0
+
         # Event reward: target reached, collision, out of driving area
         self.out_of_driving_area = self.check_out_of_driving_area()
         self.traffic_light_violation = self.check_traffic_light_violation()
+        flow_direction_near_junction = self.get_direction_near_junction()
+
         if self.out_of_driving_area or self.out_of_range:  # out of driving area
             reward_done = - punish_out_of_map
             event_flag = 1
@@ -1098,6 +1099,12 @@ class LasvsimEnv():
         elif self.navigation_violation:
             reward_navigation_violation = - punish_out_of_map # use the same reward as out of map
             event_flag = 5
+        elif flow_direction_near_junction == 2:
+            event_flag = 6 # NAVI_LEFT
+        elif flow_direction_near_junction == 3:
+            event_flag = 7 # NAVI_RIGHT
+        elif flow_direction_near_junction == 4:
+            event_flag = 8 # NAVI_UTURN
 
         reward += (reward_done + reward_collision + reward_traffic_light_violation + reward_navigation_violation)
 
@@ -1124,6 +1131,12 @@ class LasvsimEnv():
         return (self.lasvsim_context.ego.traffic_light == "red" or \
                 self.lasvsim_context.ego.traffic_light == "yellow") \
             and self.lasvsim_context.ego.dis_to_next_junction < 10
+
+    def get_direction_near_junction(self)-> str:
+        if self.lasvsim_context.ego.dis_to_next_junction > 10:
+            return 0
+        else:
+            return self.lasvsim_context.ego.flow_direction
 
     def judge_done(self, res) -> bool:
         # terminated
@@ -1217,13 +1230,14 @@ class LasvsimEnv():
         state = np.array([x, y, u, v, phi, w])
         last_action = self.lasvsim_context.ego.action
 
-        # update traffic light
+        # update traffic light, movement_id, dis_to_next_junction and flow_direction
         vehicle_navigation = self.simulator.get_idc_vehicle_nav(self.ego_id)
         movement_id = vehicle_navigation["next_movement_id"]
         dis_to_next_junction = vehicle_navigation["dis_to_next_junction"]
 
         # 偏离路口就没有movement_id
         traffic_light = "unknown"
+        flow_direction = 0
         if dis_to_next_junction is None:
             dis_to_next_junction = 200
         if movement_id is not None and movement_id != "" and movement_id != "default":
@@ -1240,6 +1254,8 @@ class LasvsimEnv():
             else:
                 raise ValueError(f"Invalid light status: {light_status}")
 
+            flow_direction = self.movement_id_to_direction[movement_id]
+            
         return EgoVehicle(
             x=x, y=y, phi=phi, u=u, v=v, w=w,
             length=self.ego_length, width=self.ego_width,
@@ -1253,7 +1269,8 @@ class LasvsimEnv():
             right_boundary_distance=right_boundary_distance,
             polygon=polygon,
             traffic_light=traffic_light,
-            dis_to_next_junction=dis_to_next_junction
+            dis_to_next_junction=dis_to_next_junction,
+            flow_direction=flow_direction
         )
 
     def get_ref_context(self):
