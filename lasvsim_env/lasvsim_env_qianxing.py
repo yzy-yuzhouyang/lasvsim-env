@@ -1,6 +1,6 @@
 import os
 import random
-from shapely import segmentize
+from shapely import segmentize, simplify
 from collections import deque
 from typing import Any, Dict, Tuple, List, Deque
 import numpy as np
@@ -30,6 +30,8 @@ def add_map_objs(line_string, map_objs, max_speed, obj_type):
         map_objs: list.
         obj_type: one-hot list, e.g. [0, 0, 1, 0, 0, 0] for center lanes.
     """
+    # line_string = simplify(line_string, tolerance=1.0)
+    line_string = segmentize(line_string, max_segment_length=5.0)
     default_light_status = [0, 0, 1] # 默认交通灯（无灯）
 
     xs = np.array(line_string.xy[0]).astype(np.float32)
@@ -229,11 +231,9 @@ class LasvsimEnv():
             for link in seg["ordered_links"]: # 每个link
                 # 左右道路边界
                 linestring = LineString([(p.get("x", 0), p.get("y", 0)) for p in link["left_boundary"]["points"]]) # TODO: 这里不应该默认给0，等待接口修复
-                segmentized_linestring = segmentize(linestring, max_segment_length=5.0)
-                count = add_map_objs(segmentized_linestring, map_objs, max_speed=0.0, obj_type=ROAD_EDGE) # 道路边界线
+                count = add_map_objs(linestring, map_objs, max_speed=0.0, obj_type=ROAD_EDGE) # 道路边界线
                 linestring = LineString([(p.get("x", 0), p.get("y", 0)) for p in link["right_boundary"]["points"]]) # TODO: 这里不应该默认给0，等待接口修复
-                segmentized_linestring = segmentize(linestring, max_segment_length=5.0)
-                count += add_map_objs(segmentized_linestring, map_objs, max_speed=0.0, obj_type=ROAD_EDGE) # 道路边界线
+                count += add_map_objs(linestring, map_objs, max_speed=0.0, obj_type=ROAD_EDGE) # 道路边界线
                 
                 # 对每个车道
                 for i, lane in enumerate(link["ordered_lanes"]):
@@ -243,9 +243,8 @@ class LasvsimEnv():
                         continue
                     elif lane_type == 1:
                         # 添加车道中心线
-                        lane_linestring = LineString([(p["point"]["x"], p["point"]["y"]) for p in lane["center_line"]])
-                        segmentized_linestring = segmentize(lane_linestring, max_segment_length=5.0)
-                        count += add_map_objs(segmentized_linestring, map_objs, max_speed=12.0, obj_type=CENTER_LINE)
+                        linestring = LineString([(p["point"]["x"], p["point"]["y"]) for p in lane["center_line"]])
+                        count += add_map_objs(linestring, map_objs, max_speed=12.0, obj_type=CENTER_LINE)
                     elif lane_type == 2:
                         continue
                     elif lane_type == 3:
@@ -256,21 +255,18 @@ class LasvsimEnv():
                         linestring = LineString([(p["point"]["x"] - p["left_width"] * np.sin(p.get("heading", 0)), # TODO: 这里不该默认给0，等待接口修复
                                                   p["point"]["y"] + p["left_width"] * np.cos(p.get("heading", 0))) # TODO: 这里不该默认给0，等待接口修复
                                                   for p in lane["center_line"]])
-                        segmentized_linestring = segmentize(linestring, max_segment_length=5.0)
-                        count += add_map_objs(segmentized_linestring, map_objs, max_speed=0.0, obj_type=LINE_EDGE)
+                        count += add_map_objs(linestring, map_objs, max_speed=0.0, obj_type=LINE_EDGE)
                     
                     # 其他情况，加入右侧车道线
                     linestring = LineString([(p["point"]["x"] - p["right_width"] * np.sin(p.get("heading", 0)), # TODO: 这里不该默认给0，等待接口修复
                                               p["point"]["y"] + p["right_width"] * np.cos(p.get("heading", 0))) # TODO: 这里不该默认给0，等待接口修复
                                               for p in lane["center_line"]])
-                    segmentized_linestring = segmentize(linestring, max_segment_length=5.0)
-                    count += add_map_objs(segmentized_linestring, map_objs, max_speed=0.0, obj_type=LINE_EDGE)
+                    count += add_map_objs(linestring, map_objs, max_speed=0.0, obj_type=LINE_EDGE)
 
                     # 停止线
                     if "stopline" in lane.keys():
                         linestring = LineString([(p["x"], p["y"]) for p in lane["stopline"]["shape"]["points"]])
-                        segmentized_linestring = segmentize(linestring, max_segment_length=5.0)
-                        count += add_map_objs(segmentized_linestring, map_objs, max_speed=0.0, obj_type=STOP_LINE)
+                        count += add_map_objs(linestring, map_objs, max_speed=0.0, obj_type=STOP_LINE)
                     
                     # print(f"finish adding lane {lane.id} with {count} vectors.")
         
