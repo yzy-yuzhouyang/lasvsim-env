@@ -53,14 +53,13 @@ def add_map_objs(line_string, map_objs, max_speed, obj_type):
         count += 1
     return count
 
-def add_connection_objs(connection, map_objs, max_speed, obj_type, id_index_map):
+def add_connection_objs(connection, map_objs, max_speed, obj_type):
     """
     Add segmentized connection line_string to map_objs and store id-to-index mapping.
     Args:
         connection: dict.
         map_objs: list.
         obj_type: one-hot list, e.g. [0, 0, 1, 0, 0, 0] for center lanes.
-        id_index_map: dict, mapping connection id to indices in map_objs.
     Returns:
         count: Number of objects added.
     """
@@ -88,12 +87,6 @@ def add_connection_objs(connection, map_objs, max_speed, obj_type, id_index_map)
             *default_light_status
         ])
         count += 1
-    
-    if connection["movement_id"] in id_index_map.keys():
-        id_index_map[connection["movement_id"]].extend(list(range(start_idx, start_idx + count)))
-    else:
-        id_index_map[connection["movement_id"]] = list(range(start_idx, start_idx + count))
-    
     return count
 
 NAVI_UNKNOWN  = np.array([1, 0, 0, 0, 0])
@@ -151,7 +144,16 @@ class LasvsimEnv():
             print(f"randomly select scenario[{random_index}].")
         else: # 测试环境
             print("initializing test environment...")
-            record_id = self.qx_client.process_task.get_task_record_ids(task_id)["record_ids"][0]
+            record_ids = self.qx_client.process_task.get_task_record_ids(task_id)["record_ids"]
+            scen_ids = [self.qx_client.process_task.get_record_scenario(task_id, record_id)["scen_id"] for record_id in record_ids]
+            # remove the duplicated scen_id, and get the index of the non-duplicated scenarios in the original list
+            unique_scen_ids, unique_scen_indices = np.unique(scen_ids, return_index=True)
+            # randomly select one scenario
+            random_index = random.randint(0, len(unique_scen_indices) - 1)
+            unique_scen_indice = unique_scen_indices[random_index]
+            record_id = record_ids[unique_scen_indice]
+            print(f"randomly select scenario: {unique_scen_ids[random_index]}, record_id: {record_id}")
+
             new_record = self.qx_client.process_task.copy_record(task_id, record_id)
             
             self.scenario_id = new_record["scen_id"]
@@ -206,9 +208,6 @@ class LasvsimEnv():
         self.history_sur_veh: Deque = deque([[] for _ in range(self.sur_num)], maxlen=self.sur_num)
         self.can_not_get_lane_id = False
 
-        # connection id to index mapping
-        self.id_index_map = {}
-
         # ================== 3. Process static map, surroundings and render ==================
         self.lane_nav = {}
         self.movement_id_to_direction = {}
@@ -226,7 +225,12 @@ class LasvsimEnv():
         ZEBRA       = [0, 0, 0, 0, 1, 0]
         VIRTUAL     = [0, 0, 0, 0, 0, 1]
 
+        total_count = 0
         map_objs = []
+        linkid2map_obj = {}
+        movementid2map_obj = {}
+        map_objs_in_junction = [] # index of map_objs indicating whether a map_obj belongs to a junction
+        map_objs_is_center_line = [] # index of map_objs indicating whether a map_obj is a center line
         for seg in self.qx_map["data"]["segments"]: # 每个segment
             for link in seg["ordered_links"]: # 每个link
                 # 左右道路边界
@@ -244,7 +248,9 @@ class LasvsimEnv():
                     elif lane_type == 1:
                         # 添加车道中心线
                         linestring = LineString([(p["point"]["x"], p["point"]["y"]) for p in lane["center_line"]])
-                        count += add_map_objs(linestring, map_objs, max_speed=12.0, obj_type=CENTER_LINE)
+                        _count = add_map_objs(linestring, map_objs, max_speed=12.0, obj_type=CENTER_LINE)
+                        map_objs_is_center_line.extend(list(range(len(map_objs) - _count, len(map_objs))))
+                        count += _count
                     elif lane_type == 2:
                         continue
                     elif lane_type == 3:
@@ -269,7 +275,12 @@ class LasvsimEnv():
                         count += add_map_objs(linestring, map_objs, max_speed=0.0, obj_type=STOP_LINE)
                     
                     # print(f"finish adding lane {lane.id} with {count} vectors.")
-        
+                if link["id"] in linkid2map_obj.keys():
+                    linkid2map_obj[link["id"]].extend(list(range(len(map_objs) - count, len(map_objs))))
+                else:
+                    linkid2map_obj[link["id"]] = list(range(len(map_objs) - count, len(map_objs)))
+                total_count += count
+
         for junc in self.qx_map["data"]["junctions"]: # 每个junction
             if junc["type"] == 1:
                 continue
@@ -286,7 +297,13 @@ class LasvsimEnv():
                     # FIXME: adapt to new version of qx
                     linestring = LineString([(p['x'], p['y']) for p in connection["path"]["points"]])
                     linestring = linestring.simplify(0.2).segmentize(5.0)
-                    count += add_connection_objs(connection, map_objs, max_speed=6.0, obj_type=CENTER_LINE, id_index_map=self.id_index_map)
+                    count = add_connection_objs(connection, map_objs, max_speed=6.0, obj_type=CENTER_LINE)
+                    if connection["movement_id"] in movementid2map_obj.keys():
+                        movementid2map_obj[connection["movement_id"]].extend(list(range(len(map_objs) - count, len(map_objs))))
+                    else:
+                        movementid2map_obj[connection["movement_id"]] = list(range(len(map_objs) - count, len(map_objs)))
+                    map_objs_in_junction.extend(list(range(len(map_objs) - count, len(map_objs))))
+                    total_count += count
                     # count += add_map_objs(linestring, map_objs, max_speed=6.0, obj_type=CENTER_LINE)
                 
                 # 人行道
@@ -311,13 +328,35 @@ class LasvsimEnv():
                         *ZEBRA,
                         0, 0, 1  # default light status
                     ])
-                    count += 1
+                    total_count += 1
 
 
         # 每个小段是一个vector，将这些信息按照观测形式进行保存，得到self.map_objs
         # self.map_objs是长度为(S, 16)的向量，S表示切出来的vector数量（大约几千）
         # 16维观测的设置按照RL Planner文档，这里的x,y,phi取绝对坐标
+        assert total_count == len(map_objs), f"Error: total_count={total_count}, len(map_objs)={len(map_objs)}"
+        assert len(map_objs_in_junction) == sum([len(idx) for idx in movementid2map_obj.values()]), f"Error: len(map_objs_in_junction)={len(map_objs_in_junction)}, sum([len(movementid2map_obj[m]) for m in movementid2map_obj.keys()])={sum([len(movementid2map_obj[m]) for m in movementid2map_obj.keys()])}"
+
         self.map_objs = np.array(map_objs)
+        map_len = len(self.map_objs)
+
+        self.movementid2map_obj = {}
+        is_movement = np.zeros((len(movementid2map_obj), map_len), dtype=bool)
+        for idx, value in enumerate(movementid2map_obj.values()):
+            is_movement[idx, value] = True
+        self.movementid2map_obj = {key: is_movement[idx] for idx, key in enumerate(movementid2map_obj.keys())}
+
+        self.linkid2map_obj = {}
+        is_link = np.zeros((len(linkid2map_obj), map_len), dtype=bool)
+        for idx, value in enumerate(linkid2map_obj.values()):
+            is_link[idx, value] = True
+        self.linkid2map_obj = {key: is_link[idx] for idx, key in enumerate(linkid2map_obj.keys())}
+        
+        self.map_objs_in_junction = np.zeros(map_len, dtype=bool)
+        self.map_objs_in_junction[map_objs_in_junction] = True
+
+        self.map_objs_is_center_line = np.zeros(map_len, dtype=bool)
+        self.map_objs_is_center_line[map_objs_is_center_line] = True
         # print(f"finish initializing self.map_objs with shape: {self.map_objs.shape}.")
         
         self.surrounding_deque=deque([[] for _ in range(10)], maxlen=10)
@@ -343,8 +382,8 @@ class LasvsimEnv():
 
     def update_lasvsim_context(self, real_action: np.ndarray = None):
         ego_context = self.get_ego_context(real_action)
-        ref_context = self.get_ref_context()
-        sur_context = self.get_sur_context()
+        ref_context = self.get_ref_context(ego_context)
+        sur_context = self.get_sur_context(ego_context, ref_context)
         
         # Update history_sur_veh
         self.history_sur_veh.append(sur_context)
@@ -500,17 +539,33 @@ class LasvsimEnv():
         ego_u = self.lasvsim_context.ego.u
         ego_center = ego_center + ego_u * np.array([np.cos(ego_phi), np.sin(ego_phi)]) * 2.0
 
-        obj_centers = self.map_objs[:, :2]
-        # Calculate distances to ego center
-        distances = np.sqrt(np.sum((obj_centers - ego_center) ** 2, axis=1))
+        map_objs = self.map_objs.copy()
+        # Update light status for map objs
+        map_objs = self.update_light_status(map_objs)
 
-        # Use partition to find indices of self.map_vec_num nearest objects 
-        selected_indices = np.argpartition(distances, self.map_vec_num)[:self.map_vec_num]
-        sorted_indices = selected_indices[np.argsort(distances[selected_indices])]
-        # update light status for map objs
-        self.update_light_status()
-        # Select the updated objects           
-        selected_objs = self.map_objs[sorted_indices]
+        # Ignore objects in the junction that do not correspond to the current movement_id
+        movement_id = self.lasvsim_context.ego.movement_id
+        if movement_id is not None and movement_id != "":
+            movement_idx = self.movementid2map_obj[movement_id]
+        else:
+            movement_idx = np.zeros_like(self.map_objs_in_junction, dtype=bool)
+        ignore_indices = np.logical_and(self.map_objs_in_junction, ~movement_idx)
+        navi_map_objs = map_objs[~ignore_indices]
+
+        if len(navi_map_objs) < self.map_vec_num:
+            navi_map_objs = np.concatenate([navi_map_objs, np.zeros((self.map_vec_num - len(navi_map_objs), self.vec_dim))], axis=0)
+            # Set mask to 1 for padded objects
+            navi_map_objs[navi_map_objs.shape[0]:, -4] = 1 # FIXME: hard code
+            selected_objs = navi_map_objs
+        else:
+            # Calculate distances to ego center
+            obj_centers = navi_map_objs[:, :2]
+            distances_square = np.sum((obj_centers - ego_center) ** 2, axis=1)
+            # Use partition to find indices of self.map_vec_num nearest objects 
+            selected_indices = np.argpartition(distances_square, self.map_vec_num)[:self.map_vec_num]
+            sorted_indices = selected_indices[np.argsort(distances_square[selected_indices])]
+            # Select the updated objects           
+            selected_objs = navi_map_objs[sorted_indices]
         
         cos_tf = np.cos(-ego_phi)
         sin_tf = np.sin(-ego_phi)
@@ -538,13 +593,50 @@ class LasvsimEnv():
         # -------------- 4.导航观测更新 --------------
         if self.nav_dim > 0:
             obs[self.obs_dim - self.nav_dim] = np.clip(self.lasvsim_context.ego.dis_to_next_junction, 0, 200) / 200.0
-            movement_id = self.lasvsim_context.ego.movement_id
-            if movement_id is not None and movement_id != "" and movement_id != "default":
-                obs[self.obs_dim - self.nav_dim + 1:] = get_nav_obs_by_flow_direction(self.movement_id_to_direction[movement_id])
-            else:
-                obs[self.obs_dim - self.nav_dim + 1:] = NAVI_UNKNOWN
+            flow_direction = self.lasvsim_context.ego.flow_direction
+            obs[self.obs_dim - self.nav_dim + 1:] = get_nav_obs_by_flow_direction(flow_direction)
+            
         return obs
 
+    def update_light_status(self, map_objs):
+        """
+        更新 self.map_objs 中的信号灯状态。
+        1. 路口中的所有对象的信号灯状态根据实际信号灯状态更新；
+        2. 导航车道中心线的信号灯状态更新为绿灯。
+        """
+        # 偏离路口就没有movement_id
+        movement_id = self.lasvsim_context.ego.movement_id
+
+        if movement_id is not None and movement_id != "" and movement_id != "default":
+            # 获取信号灯状态
+            light_status = self.lasvsim_context.ego.traffic_light
+
+            # 根据 light_status 设置对应的 one-hot 向量
+            if light_status == "green":
+                one_hot_vector = np.array([1, 0, 0]) # 绿灯
+            elif light_status == "red" or light_status == "yellow":
+                one_hot_vector = np.array([0, 1, 0]) # 红灯或黄灯
+            elif light_status == "unknown":
+                one_hot_vector = np.array([0, 0, 1])
+            else:
+                raise ValueError(f"Unknown light status: {light_status}")
+            
+            # 查找 movementid2map_obj 中的对应索引并更新信号灯状态
+            if movement_id in self.movementid2map_obj:
+                movement_idx = self.movementid2map_obj[movement_id]  # 获取所有与 movement_id 相关的索引
+                map_objs[movement_idx, 13:16] = one_hot_vector[np.newaxis, :]  # 14 到 16 维存储信号灯状态
+
+        # self.nav_info
+        for link in self.nav_info["link_nav"]:
+            if link in self.linkid2map_obj:
+                link_idx = self.linkid2map_obj[link]
+                indices = np.logical_and(link_idx, self.map_objs_is_center_line)
+                map_objs[indices, 13:16] = np.array([[1, 0, 0]])
+            else:
+                raise ValueError(f"Error: link {link} not in linkid2map_obj.")
+            
+        return map_objs
+            
     def step(self, delta_action: np.ndarray):
         # action: network output, \in [-1, 1]
         self.alive_step += 1
@@ -1039,9 +1131,12 @@ class LasvsimEnv():
         reward_collision = 0
         reward_traffic_light_violation = 0
         reward_navigation_violation = 0
+
         # Event reward: target reached, collision, out of driving area
         self.out_of_driving_area = self.check_out_of_driving_area()
         self.traffic_light_violation = self.check_traffic_light_violation()
+        flow_direction_near_junction = self.get_direction_near_junction()
+
         if self.out_of_driving_area or self.out_of_range:  # out of driving area
             reward_done = - punish_out_of_map
             event_flag = 1
@@ -1056,6 +1151,12 @@ class LasvsimEnv():
         elif self.navigation_violation:
             reward_navigation_violation = - punish_out_of_map # use the same reward as out of map
             event_flag = 5
+        elif flow_direction_near_junction == 2:
+            event_flag = 6 # NAVI_LEFT
+        elif flow_direction_near_junction == 3:
+            event_flag = 7 # NAVI_RIGHT
+        elif flow_direction_near_junction == 4:
+            event_flag = 8 # NAVI_UTURN
 
         reward += (reward_done + reward_collision + reward_traffic_light_violation + reward_navigation_violation)
 
@@ -1083,6 +1184,12 @@ class LasvsimEnv():
                 self.lasvsim_context.ego.traffic_light == "yellow") \
             and self.lasvsim_context.ego.dis_to_next_junction < 10
 
+    def get_direction_near_junction(self)-> str:
+        if self.lasvsim_context.ego.dis_to_next_junction > 10:
+            return 0
+        else:
+            return self.lasvsim_context.ego.flow_direction
+
     def judge_done(self, res) -> bool:
         # terminated
         park_flag = (self.lasvsim_context.ego.u == 0)
@@ -1090,11 +1197,13 @@ class LasvsimEnv():
         out_of_defined_region = self.out_of_range
         out_of_driving_area = self.out_of_driving_area
         traffic_light_violation = self.traffic_light_violation
-        navagation_violation = self.navigation_violation
+        navigation_violation = self.navigation_violation
 
         # truncated
         max_step_truncated = (self.alive_step >= self.max_step)
         success = (res["code"] == 1001) and (collision == 0)
+        if res["code"] == 1001 and collision == 1:
+            raise ValueError("Success and collision at the same time")
 
         done_info = {
             "event_pause": park_flag,
@@ -1103,12 +1212,12 @@ class LasvsimEnv():
             "event_mapout": out_of_driving_area,
             "event_max_step_truncated": max_step_truncated,
             "event_traffic_light_violation": traffic_light_violation,
-            "event_navigation_violation": navagation_violation,
+            "event_navigation_violation": navigation_violation,
             "event_success": success,
         }
 
-        terminated = collision or out_of_defined_region or out_of_driving_area or traffic_light_violation or navagation_violation
-        truncated = max_step_truncated or success
+        terminated = collision or out_of_defined_region or out_of_driving_area or traffic_light_violation or navigation_violation
+        truncated = max_step_truncated or success # the success sample will be removed from the replay buffer due to plan setting
         
         # if terminated or truncated:
         #     print(f"# DONE: {done_info}")
@@ -1145,7 +1254,7 @@ class LasvsimEnv():
             if lane_id not in self.lane_nav:
                 self.navigation_violation = True
                 self.can_not_get_lane_id = True
-                print(f"lane_id: {lane_id} not in lane_nav")
+                # print(f"lane_id: {lane_id} not in lane_nav")
         else:
             self.can_not_get_lane_id = True
             # print('X'*50)
@@ -1173,13 +1282,14 @@ class LasvsimEnv():
         state = np.array([x, y, u, v, phi, w])
         last_action = self.lasvsim_context.ego.action
 
-        # update traffic light
+        # update traffic light, movement_id, dis_to_next_junction and flow_direction
         vehicle_navigation = self.simulator.get_idc_vehicle_nav(self.ego_id)
         movement_id = vehicle_navigation["next_movement_id"]
         dis_to_next_junction = vehicle_navigation["dis_to_next_junction"]
 
         # 偏离路口就没有movement_id
         traffic_light = "unknown"
+        flow_direction = 0
         if dis_to_next_junction is None:
             dis_to_next_junction = 200
         if movement_id is not None and movement_id != "" and movement_id != "default":
@@ -1196,6 +1306,8 @@ class LasvsimEnv():
             else:
                 raise ValueError(f"Invalid light status: {light_status}")
 
+            flow_direction = self.movement_id_to_direction[movement_id]
+            
         return EgoVehicle(
             x=x, y=y, phi=phi, u=u, v=v, w=w,
             length=self.ego_length, width=self.ego_width,
@@ -1209,14 +1321,17 @@ class LasvsimEnv():
             right_boundary_distance=right_boundary_distance,
             polygon=polygon,
             traffic_light=traffic_light,
-            dis_to_next_junction=dis_to_next_junction
+            dis_to_next_junction=dis_to_next_junction,
+            flow_direction=flow_direction
         )
 
-    def get_ref_context(self):
-        # ref_points = self.get_remote_lasvsim_ref_line()
-        
+    def get_ref_context(self, ego_context):
         ref_lines = self.reference_info
+
         if len(ref_lines)==0:
+            if self.navigation_violation == 0 and self.pos_info["type"] != 3:
+                # raise ValueError("ref_lines is empty, but navigation_violation is False")
+                print("ref_lines is empty, but navigation_violation is False")
             if not self.can_not_get_lane_id:
                 lane_id = self.lasvsim_context.ego.lane_id
                 target_lane = self.lane_nav[lane_id]
@@ -1225,22 +1340,32 @@ class LasvsimEnv():
                 return [ref_line_string] * len(self.lasvsim_context.ref_list)
             else:
                 return self.lasvsim_context.ref_list
+
+        # remove the unnecessary ref lines near junction
+        # Note: the index of the leftmost one is 0, and that of the rightmost one is -1
+        if ego_context.dis_to_next_junction < 20 and ego_context.in_junction == 0:
+            if ego_context.flow_direction == 1: # straight
+                if len(ref_lines) > 3:
+                    ref_lines = ref_lines[1:] # remove the leftmost line
+            elif ego_context.flow_direction == 2 or ego_context.flow_direction == 4: # left or uturn
+                ref_lines = [ref_lines[0]] # only keep the leftmost line
+            elif ego_context.flow_direction == 3: # right
+                ref_lines = [ref_lines[-1]] # only keep the rightmost line
             
-        ref_context = []
-        for ref_line in ref_lines:
-            ref_line_xy = [[point["x"], point["y"]] for point in ref_line["points"]]
-            ref_line_string = LineString(ref_line_xy)
-            ref_context.append(ref_line_string)
-            
+        ref_context = [
+            LineString([[point["x"], point["y"]] for point in ref_line["points"]]) 
+            for ref_line in ref_lines
+        ]
+                    
         return ref_context
 
-    def get_sur_context(self):
+    def get_sur_context(self, ego_context, ref_context):
         # perception_info = self.get_remote_lasvsim_perception_info()
         around_moving_objs = self.perception_info
 
-        ego_x, ego_y, ego_phi = self.lasvsim_context.ego.x, \
-            self.lasvsim_context.ego.y, \
-            self.lasvsim_context.ego.phi
+        ego_x, ego_y, ego_phi = ego_context.x, \
+            ego_context.y, \
+            ego_context.phi
 
         # filter neighbor vehicles for better efficiency
         distances = [
@@ -1356,25 +1481,6 @@ class LasvsimEnv():
     def get_remote_lasvsim_perception_info(self):
         return self.simulator.get_vehicle_perception_info(self.ego_id)
     
-    def update_light_status(self):
-        """
-        更新 self.map_objs 中的信号灯状态。
-        """
-        # 偏离路口就没有movement_id
-        movement_id = self.lasvsim_context.ego.movement_id
-
-        if movement_id is not None and movement_id != "":
-            # 获取信号灯状态
-            light_status = self.simulator.get_movement_signal(movement_id)["current_signal"]
-
-            # 根据 light_status 设置对应的 one-hot 向量
-            one_hot_vector = [1, 0, 0] if light_status == 2 else [0, 1, 0] if light_status == 1 else [0, 0, 1]
-
-            # 查找 id_index_map 中的对应索引并更新信号灯状态
-            if movement_id in self.id_index_map:
-                indices = self.id_index_map[movement_id]  # 获取所有与 movement_id 相关的索引
-                for idx in indices:
-                    self.map_objs[idx][13:16] = one_hot_vector  # 14 到 16 维存储信号灯状态
 
 if __name__ == "__main__":
     from lasvsim_env.config import get_env_config
