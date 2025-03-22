@@ -215,7 +215,7 @@ class LasvsimEnv():
         self.laneid2lane = {}
         self.linkid2link = {}
         self.convert_map(self.qx_map)
-        print("len(self.laneid2lane): ", len(self.laneid2lane))
+        # print("len(self.laneid2lane): ", len(self.laneid2lane))
         # 首先将每条车道构造成linestring对象，利用segmentize函数切成小段
         
         ROAD_EDGE   = [1, 0, 0, 0, 0, 0]
@@ -655,8 +655,8 @@ class LasvsimEnv():
 
         terminated, truncated, done_info = self.judge_done(step_info["step_res"])
 
-        if terminated or truncated:
-            print(f"alive step: {self.alive_step}, done info: {[event for event in done_info if done_info[event]]}")
+        # if terminated or truncated:
+        #     print(f"alive step: {self.alive_step:4d}, done info: {[event for event in done_info if done_info[event]]}")
         
         return obs, reward, terminated, truncated, {**rew_info, **done_info, "event_alive_step": self.alive_step, "event_qx_error": 0}
 
@@ -1246,13 +1246,12 @@ class LasvsimEnv():
         v = self.moving_info["v"]
         w = self.moving_info["w"]
 
-        # assert not in_junction
+        # get navigation_violation in lane
         self.can_not_get_lane_id = False
         self.navigation_violation = False
-
         if ego_pos == 1: # on lane
             link_nav_id = self.nav_info["link_nav"]
-            curent_lane_id = [lane['id'] for lane in self.linkid2link[link_nav_id[0]]['ordered_lanes']]
+            curent_lane_id = [lane['id'] for lane in self.linkid2link[link_nav_id[0]]['ordered_lanes']] if len(link_nav_id) > 0 else []
             if lane_id not in curent_lane_id:
                 self.navigation_violation = True
                 self.can_not_get_lane_id = True
