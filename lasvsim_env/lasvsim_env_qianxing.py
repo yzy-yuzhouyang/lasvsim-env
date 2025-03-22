@@ -207,13 +207,13 @@ class LasvsimEnv():
         self.can_not_get_lane_id = False
 
         # ================== 3. Process static map, surroundings and render ==================
-        self.lane_nav = {}
         self.movement_id_to_direction = {}
         self.qx_map = self.get_remote_hdmap(self.scenario_id, self.scenario_version)
 
+        self.laneid2lane = {}
+        self.linkid2link = {}
         self.convert_map(self.qx_map)
-        print("len(self.lane_nav): ", len(self.lane_nav))
-        # 根据self.lane_nav，将车道中心线转化为self.map_objs
+        print("len(self.laneid2lane): ", len(self.laneid2lane))
         # 首先将每条车道构造成linestring对象，利用segmentize函数切成小段
         
         ROAD_EDGE   = [1, 0, 0, 0, 0, 0]
@@ -658,8 +658,8 @@ class LasvsimEnv():
 
         terminated, truncated, done_info = self.judge_done(step_info["step_res"])
 
-        # if terminated or truncated:
-        #     print(f"alive step: {self.alive_step}, done info: {[event for event in done_info if done_info[event]]}")
+        if terminated or truncated:
+            print(f"alive step: {self.alive_step}, done info: {[event for event in done_info if done_info[event]]}")
         
         return obs, reward, terminated, truncated, {**rew_info, **done_info, "event_alive_step": self.alive_step, "event_qx_error": 0}
 
@@ -1254,7 +1254,9 @@ class LasvsimEnv():
         self.navigation_violation = False
 
         if ego_pos == 1: # on lane
-            if lane_id not in self.lane_nav:
+            link_nav_id = self.nav_info["link_nav"]
+            curent_lane_id = [lane['id'] for lane in self.linkid2link[link_nav_id[0]]['ordered_lanes']]
+            if lane_id not in curent_lane_id:
                 self.navigation_violation = True
                 self.can_not_get_lane_id = True
                 # print(f"lane_id: {lane_id} not in lane_nav")
@@ -1337,7 +1339,7 @@ class LasvsimEnv():
                 print("ref_lines is empty, but navigation_violation is False")
             if not self.can_not_get_lane_id:
                 lane_id = self.lasvsim_context.ego.lane_id
-                target_lane = self.lane_nav[lane_id]
+                target_lane = self.laneid2lane[lane_id]
                 ref_line_xy = [[p["point"]["x"], p["point"]["y"]] for p in target_lane["center_line"]]
                 ref_line_string = LineString(ref_line_xy)
                 return [ref_line_string] * len(self.lasvsim_context.ref_list)
@@ -1421,17 +1423,12 @@ class LasvsimEnv():
         return sur_context
 
     def convert_map(self, qx_map):
-        link_nav = self.get_ego_navigation_info()
         # print(f"link_nav: {link_nav}")
         for segment in qx_map["data"]["segments"]:
             for link in segment["ordered_links"]:
-                # print(f"processing {link['id']}.")
-                if not link["id"] in link_nav:
-                    # print(f"link {link['id']} is not in {link_nav}, not adding lanes. continue.")
-                    continue
+                self.linkid2link[link["id"]] = link
                 for lane in link["ordered_lanes"]:
-                    # print("lane: ", lane)
-                    self.lane_nav[lane["id"]] = lane
+                    self.laneid2lane[lane["id"]] = lane
 
     def get_real_action(self, delta_action: np.ndarray, last_action: np.ndarray):
         # input normalized increment action, output clipped real action
