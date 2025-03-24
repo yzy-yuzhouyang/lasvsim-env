@@ -733,8 +733,7 @@ class LasvsimEnv():
         next_ref_v = next_ref_states[:, 3]
 
         # live reward
-        rew_step = 0.5 * np.clip(ego_vx, 0, 2.0) * \
-            np.ones(ref_param.shape[0])  # 0~1
+        rew_step = np.ones(ref_param.shape[0])  # 0~1
 
         # tracking_error
         tracking_error = -(ego_x - ref_x) * np.sin(ref_phi) + \
