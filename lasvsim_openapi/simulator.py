@@ -221,7 +221,7 @@ class Simulator:
             StopRes,
         )
 
-    def reset(self, reset_traffic_flow: bool = False,reset_vehicle: List = None) -> ResetRes:
+    def reset(self, reset_traffic_flow: bool = False, reset_vehicle: List = []) -> ResetRes:
         """Reset simulator.
 
         Args:
@@ -233,6 +233,7 @@ class Simulator:
         Raises:
             APIError: If the request fails
         """
+        assert not (reset_traffic_flow is False and len(reset_vehicle) > 0), f"reset_traffic_flow is {reset_traffic_flow}, reset_vehicle is {reset_vehicle}"
         return self.http_client.post(
             "/openapi/cosim/v2/simulation/reset",
             {
@@ -242,7 +243,6 @@ class Simulator:
             },
             ResetRes,
         )
-
 
     # --------- 地图部分 ---------
     def get_current_stage(self, junction_id: str) -> GetCurrentStageRes:

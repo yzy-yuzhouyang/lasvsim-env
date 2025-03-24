@@ -661,14 +661,11 @@ class LasvsimEnv():
     def reset(self, reset_traffic_flow: bool = False):
         test_vehicle_list = []
         self.alive_step = 0
-        random_link_nav = self.global_link_nav[np.random.choice(len(self.global_link_nav)):]
-        reset_test_vehicle = {
-            "link_path": random_link_nav,
-            "obj_id": self.ego_id,
-        }
         if self.scenario_cnt < 10:
             while len(test_vehicle_list) == 0:
-                self.reset_remote_lasvsim(reset_traffic_flow, reset_test_vehicle)
+                random_link_nav = self.global_link_nav[np.random.choice(len(self.global_link_nav)):]
+                reset_vehicle = [{"link_path": random_link_nav, "vehicle_id": self.ego_id}] if reset_traffic_flow else []
+                self.reset_remote_lasvsim(reset_traffic_flow, reset_vehicle)
                 res = self.step_remote_lasvsim(0.0, 0.0)
                 self.update_step_info(res)
                 test_vehicle = self.get_remote_lasvsim_test_veh_list()
@@ -1449,9 +1446,9 @@ class LasvsimEnv():
     def get_ego_navigation_info(self):
         return self.simulator.get_vehicle_navigation_info(self.ego_id)["navigation_info"]["link_nav"]
 
-    def reset_remote_lasvsim(self, reset_traffic_flow: bool = False, reset_test_vehicle: dict = None):
+    def reset_remote_lasvsim(self, reset_traffic_flow: bool = False, reset_vehicle: List = []):
         # print("reset_traffic_flow: ", reset_traffic_flow)
-        return self.simulator.reset(reset_traffic_flow, reset_test_vehicle)
+        return self.simulator.reset(reset_traffic_flow, reset_vehicle)
 
     def step_remote_lasvsim(self, steer, acc):
         return self.simulator.idc_step(self.ego_id, steer, acc, ref_limit=40.0)
