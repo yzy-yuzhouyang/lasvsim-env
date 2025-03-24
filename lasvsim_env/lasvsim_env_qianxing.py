@@ -404,10 +404,10 @@ class LasvsimEnv():
         self.step_info = step_info["step_res"]
         self.collision_info = step_info["collision_status"]
 
-    def get_all_ref_param(self) -> np.ndarray:
+    def get_all_ref_param(self, ref_linestring: List[LineString]) -> np.ndarray:
         # return: ref_param [VARIABLE_NUM, ref_horizon, per_point_dim]
         ref_horizon = self.config["ref_horizon"]
-        ref_list = self.lasvsim_context.ref_list
+        ref_list = ref_linestring
         traffic_light = 0 # TODO: get traffic light from qianxing self.lasvsim_context.xxxx
         max_speed = self.config["max_speed"]
         dt = self.config["dt"]
@@ -625,7 +625,6 @@ class LasvsimEnv():
                 movement_idx = self.movementid2map_obj[movement_id]  # 获取所有与 movement_id 相关的索引
                 map_objs[movement_idx, 13:16] = one_hot_vector[np.newaxis, :]  # 14 到 16 维存储信号灯状态
 
-        # self.nav_info
         for link in self.nav_info["link_nav"]:
             if link in self.linkid2map_obj:
                 link_idx = self.linkid2map_obj[link]
@@ -669,7 +668,7 @@ class LasvsimEnv():
         }
         if self.scenario_cnt < 10:
             while len(test_vehicle_list) == 0:
-                self.reset_remote_lasvsim(reset_traffic_flow)
+                self.reset_remote_lasvsim(reset_traffic_flow, reset_test_vehicle)
                 res = self.step_remote_lasvsim(0.0, 0.0)
                 self.update_step_info(res)
                 test_vehicle = self.get_remote_lasvsim_test_veh_list()
@@ -716,9 +715,15 @@ class LasvsimEnv():
         info = {}
         return obs, info
 
+    def get_closest_ref_point(self, ref_param: List[LineString]) -> np.ndarray:
+        ego= self.lasvsim_context.ego
+        position_on_ref_list = [point_project_to_line(ref_line, ego.x, ego.y) for ref_line in ref_param]
+        ref_state_list = [compute_waypoint(ref_line, position_on_ref) for ref_line, position_on_ref in zip(ref_param, position_on_ref_list)] # [R, 3]
+        return np.array(ref_state_list) # [R, 3]
+
     # from rlplanner
     def get_reward(self, t: np.ndarray,  # time step
-                   ref_param, # [R, 2N+1, 4]
+                   ref_param: List[LineString], 
                   ) -> Tuple[List[np.ndarray], List[dict]]:
         # all inputs are batched
         ego= self.lasvsim_context.ego
@@ -731,13 +736,14 @@ class LasvsimEnv():
         delta_steer = (last_steer - last_last_steer) / self.config["dt"]
         jerk = (last_acc - last_last_acc) / self.config["dt"]
 
-        ref_states = ref_param[:, t, :]  # [R, 4]
-        next_ref_states = ref_param[:, t + 1, :]  # [R, 4]
-        ref_x, ref_y, ref_phi, ref_v = ref_states.T
-        next_ref_v = next_ref_states[:, 3]
+        # Note: ref_param is fixed during the planning process, but self.lasvsim_context.ref_list is updated every step
+        ref_num = len(ref_param)
+        ref_x, ref_y, ref_phi = self.get_closest_ref_point(ref_param).T
+        ref_v = np.repeat(self.config["max_speed"], ref_num) # (R, )
+        next_ref_v = ref_v
 
         # live reward
-        rew_step = np.ones(ref_param.shape[0])  # 0~1
+        rew_step = np.ones(ref_num)  # 0~1
 
         # tracking_error
         tracking_error = -(ego_x - ref_x) * np.sin(ref_phi) + \
@@ -766,41 +772,43 @@ class LasvsimEnv():
             np.abs(delta_phi) + 8,
         )  # 0~1  0~12 degree 50% 0~3 degree
 
-        ego_r = ego_r * np.ones(ref_param.shape[0])
+        ego_r = ego_r * np.ones(ref_num)
         punish_yaw_rate = 0.1 * np.where(
             np.abs(ego_r) < 2,
             np.square(ego_r),
             np.abs(ego_r) + 2,
         )  # 0~1  0~8 degree/s 50% 0~2 degree/s
 
-        punish_overspeed = np.zeros(ref_param.shape[0])
+        punish_overspeed = np.zeros(ref_num)
         index_lowspeed = ego_vx < ref_v
         punish_overspeed[index_lowspeed] = 2 * (1 - ego_vx / ref_v[index_lowspeed])
         index_overspeed = ego_vx > 1.1 * ref_v
         punish_overspeed[index_overspeed] = (1 + ego_vx - ref_v[index_overspeed])
         punish_overspeed = np.clip(punish_overspeed, 0, 2)
 
-        # reward related to action
-        nominal_steer = self._get_nominal_steer_by_state_batch(
-            ego_state, ref_param) * 180 / np.pi
+        # # reward related to action
+        # nominal_steer = self._get_nominal_steer_by_state_batch(
+        #     ego_state, ref_param) * 180 / np.pi
 
-        abs_steer = np.abs(last_steer - nominal_steer)
-        reward_steering = -np.where(abs_steer < 4,
-                                    np.square(abs_steer), 2 * abs_steer + 8)
+        # abs_steer = np.abs(last_steer - nominal_steer)
+        # reward_steering = -np.where(abs_steer < 4,
+        #                             np.square(abs_steer), 2 * abs_steer + 8)
 
-        self.out_of_action_range = abs_steer > 20
+        # self.out_of_action_range = abs_steer > 20
 
-        if ego_vx < 0.1 and self.config["enable_slow_reward"]:
-            reward_steering = reward_steering * 5
+        # if ego_vx < 0.1 and self.config["enable_slow_reward"]:
+        #     reward_steering = reward_steering * 5
 
-        abs_ax = np.abs(last_acc) * np.ones(ref_param.shape[0])
+        reward_steering = np.zeros(ref_num) 
+        
+        abs_ax = np.abs(last_acc) * np.ones(ref_num)
         reward_acc_long = -np.where(abs_ax < 2, np.square(abs_ax), 2 * abs_ax)
 
-        delta_steer = delta_steer * np.ones(ref_param.shape[0])
+        delta_steer = delta_steer * np.ones(ref_num)
         reward_delta_steer = - \
             np.where(np.abs(delta_steer) < 4, np.square(
                 delta_steer), 2 * np.abs(delta_steer) + 8)
-        jerk = jerk * np.ones(ref_param.shape[0])
+        jerk = jerk * np.ones(ref_num)
         reward_jerk = -np.where(np.abs(jerk) < 2,
                                 np.square(jerk), 2 * np.abs(jerk) + 8)
 
@@ -835,12 +843,12 @@ class LasvsimEnv():
             punish_head_ang = np.where(break_condition, 0, punish_head_ang)
             reward_acc_long = np.where(break_condition, 0, reward_acc_long)
         else:
-            nominal_acc = np.zeros(ref_param.shape[0])
-            punish_nominal_acc = np.zeros(ref_param.shape[0])
+            nominal_acc = np.zeros(ref_num)
+            punish_nominal_acc = np.zeros(ref_num)
 
         if self.braking_mode and self.config["nonimal_acc"]:
-            nominal_acc = -1.5 * np.ones(ref_param.shape[0])
-            punish_vel_long = np.zeros(ref_param.shape[0])
+            nominal_acc = -1.5 * np.ones(ref_num)
+            punish_vel_long = np.zeros(ref_num)
 
         if break_condition.any() or self.braking_mode:
             rew_step = np.where(break_condition, 1.0, rew_step)
@@ -876,8 +884,6 @@ class LasvsimEnv():
              scaled_reward_delta_steer +
              scaled_reward_jerk)
 
-        reward_ego_state = np.clip(reward_ego_state, -5, 30)
-
         rewards = reward_ego_state
         infos = {
             "reward_part2": reward_ego_state,
@@ -892,14 +898,14 @@ class LasvsimEnv():
             "reward_delta_steer": scaled_reward_delta_steer,
             "reward_jerk": scaled_reward_jerk,
 
-            "ego_vx": np.repeat(ego_vx, ref_param.shape[0]),
+            "ego_vx": np.repeat(ego_vx, ref_num),
             "ego_speed2limit": speed_error,
             "ego_abs_phi_error": np.abs(delta_phi),
             "ego_abs_tracking_error": np.abs(tracking_error),
             "ego_abs_yaw_rate": np.abs(ego_r),
             
-            "action_abs_steer": np.repeat(np.abs(last_steer), ref_param.shape[0]),
-            "action_abs_acc": np.repeat(np.abs(last_acc), ref_param.shape[0]),
+            "action_abs_steer": np.repeat(np.abs(last_steer), ref_num),
+            "action_abs_acc": np.repeat(np.abs(last_acc), ref_num),
 
             "action_abs_delta_steer": np.abs(delta_steer) * self.config["dt"],
             "action_abs_delta_acc": np.abs(jerk) * self.config["dt"],
@@ -907,9 +913,11 @@ class LasvsimEnv():
 
         return rewards, infos
 
-    def _get_nominal_steer_by_state_batch(self,
-                                          ego_state,
-                                          ref_param):
+    def _get_nominal_steer_by_state_batch(
+            self,
+            ego_state,
+            ref_param: List[LineString]
+        ):
         # ref_param: [R, 2N+1, 4]
         # use ref_state_index to determine the start, from 2N+1 to 3
         # ref_line: [R, 3, 4]
@@ -924,8 +932,10 @@ class LasvsimEnv():
             area = x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2)
             k[i] = 2 * area[i] / (a[i] * b[i] * c[i])
             return k
+        
+        ref_param_array = self.get_all_ref_param(ref_param)
 
-        ref_line = np.stack([ref_param[:, i, :]
+        ref_line = np.stack([ref_param_array[:, i, :]
                             for i in [0, 5, 10]], axis=1)  # [R, 3, 4]
         ref_x_ego_coord, ref_y_ego_coord, ref_phi_ego_coord = \
             convert_ref_to_ego_coord(ref_line[:, :, :3], ego_state)  # [R, 3]
@@ -1188,7 +1198,7 @@ class LasvsimEnv():
             and self.lasvsim_context.ego.dis_to_next_junction < 10
 
     def get_direction_near_junction(self)-> str:
-        if self.lasvsim_context.ego.dis_to_next_junction > 10:
+        if self.lasvsim_context.ego.dis_to_next_junction > 20:
             return 0
         else:
             return self.lasvsim_context.ego.flow_direction
@@ -1439,9 +1449,9 @@ class LasvsimEnv():
     def get_ego_navigation_info(self):
         return self.simulator.get_vehicle_navigation_info(self.ego_id)["navigation_info"]["link_nav"]
 
-    def reset_remote_lasvsim(self, reset_traffic_flow: bool = False):
+    def reset_remote_lasvsim(self, reset_traffic_flow: bool = False, reset_test_vehicle: dict = None):
         # print("reset_traffic_flow: ", reset_traffic_flow)
-        return self.simulator.reset(reset_traffic_flow)
+        return self.simulator.reset(reset_traffic_flow, reset_test_vehicle)
 
     def step_remote_lasvsim(self, steer, acc):
         return self.simulator.idc_step(self.ego_id, steer, acc, ref_limit=40.0)
