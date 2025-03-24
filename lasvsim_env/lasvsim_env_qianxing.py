@@ -166,8 +166,6 @@ class LasvsimEnv():
             ))
             print("New record id: ", new_record["new_record_id"])
             
-      
-
         # ================== 2. Init simulator ==================
         # init variables
         self.config = env_config
@@ -207,6 +205,7 @@ class LasvsimEnv():
         )
         self.history_sur_veh: Deque = deque([[] for _ in range(self.sur_num)], maxlen=self.sur_num)
         self.can_not_get_lane_id = False
+        self.global_link_nav = self.get_ego_navigation_info()
 
         # ================== 3. Process static map, surroundings and render ==================
         self.movement_id_to_direction = {}
@@ -663,6 +662,11 @@ class LasvsimEnv():
     def reset(self, reset_traffic_flow: bool = False):
         test_vehicle_list = []
         self.alive_step = 0
+        random_link_nav = self.global_link_nav[np.random.choice(len(self.global_link_nav)):]
+        reset_test_vehicle = {
+            "link_path": random_link_nav,
+            "obj_id": self.ego_id,
+        }
         if self.scenario_cnt < 10:
             while len(test_vehicle_list) == 0:
                 self.reset_remote_lasvsim(reset_traffic_flow)
