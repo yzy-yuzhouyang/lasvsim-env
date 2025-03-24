@@ -74,6 +74,8 @@ class Config:
     penalize_collision: bool = True
     nonimal_acc: bool = False
     reset_traffic_flow: bool = True
+    reset_v_min: float = 5.0
+    reset_v_max: float = 10.0
 
     # ===== Obs config =====
     obs_dict: Dict[str, int] = field(default_factory=lambda: {

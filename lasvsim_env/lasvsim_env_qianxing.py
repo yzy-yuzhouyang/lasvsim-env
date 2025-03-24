@@ -689,7 +689,7 @@ class LasvsimEnv():
         self.ego_id = test_vehicle_list[0]
 
         # 速度和位置的随机初始化
-        random_init_v = np.random.uniform(10, 20)
+        random_init_v = np.random.uniform(self.config["reset_v_min"], self.config["reset_v_max"])
         self.set_ego_speed(random_init_v)
         # 获取自车位置
 

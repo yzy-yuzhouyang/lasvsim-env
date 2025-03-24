@@ -27,6 +27,8 @@ env_config_multilane = {
     "real_action_upper_bound": (0.8, 0.065),
     "max_speed": 12.0,
     "reset_traffic_flow": True,
+    "reset_v_min": 5.0,
+    "reset_v_max": 10.0,
     
     # obs config
     "obs_dict": {
