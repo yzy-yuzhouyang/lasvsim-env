@@ -22,15 +22,18 @@ from lasvsim_env.utils.math_utils import \
 from lasvsim_env.dataclass import EgoVehicle, SurroundingVehicle, LasVSimContext
 from lasvsim_env.traj_processor import compute_intervals, compute_intervals_in_junction, compute_intervals_initsegment_green, compute_intervals_initsegment_red
 
-def add_map_objs(line_string, map_objs, max_speed, obj_type):
+def add_map_objs(line_string, map_objs, max_speed, obj_type, simplify_tol=None):
     """
     Add segmentized line_string to map_objs.
     Args:
-        line_string: shaple.LineString.
+        line_string: shapely.LineString.
         map_objs: list.
         obj_type: one-hot list, e.g. [0, 0, 1, 0, 0, 0] for center lanes.
+        simplify_tol: float, tolerance for simplifying the line_string.
     """
-    # line_string = simplify(line_string, tolerance=1.0)
+
+    if simplify_tol is not None:
+        line_string = simplify(line_string, tolerance=simplify_tol)
     line_string = segmentize(line_string, max_segment_length=5.0)
     default_light_status = [0, 0, 1] # 默认交通灯（无灯）
 
@@ -43,42 +46,6 @@ def add_map_objs(line_string, map_objs, max_speed, obj_type):
     orientations = np.arctan2(ys[1:] - ys[:-1], xs[1:] - xs[:-1])
     # 将每条linestring的所有vector添加到map_objs
     count = 0
-    for x, y, l, o in zip(map_obj_xs, map_obj_ys, lengths, orientations):
-        map_objs.append([
-            x, y, l, 0, 
-            np.cos(o), np.sin(o), max_speed,
-            *obj_type,
-            *default_light_status
-        ])
-        count += 1
-    return count
-
-def add_connection_objs(connection, map_objs, max_speed, obj_type):
-    """
-    Add segmentized connection line_string to map_objs and store id-to-index mapping.
-    Args:
-        connection: dict.
-        map_objs: list.
-        obj_type: one-hot list, e.g. [0, 0, 1, 0, 0, 0] for center lanes.
-    Returns:
-        count: Number of objects added.
-    """
-    linestring = LineString([(p['x'], p['y']) for p in connection["path"]["points"]])
-    linestring = linestring.simplify(0.2).segmentize(5.0)
-    
-    default_light_status = [0, 0, 1]  # 默认交通灯（无灯）
-    
-    xs = np.array(linestring.xy[0]).astype(np.float32)
-    ys = np.array(linestring.xy[1]).astype(np.float32)
-    xys = np.array([xs, ys]).T
-    map_obj_xs = (xs[:-1] + xs[1:]) / 2
-    map_obj_ys = (ys[:-1] + ys[1:]) / 2
-    lengths = np.linalg.norm(xys[1:] - xys[:-1], axis=1) / 2
-    orientations = np.arctan2(ys[1:] - ys[:-1], xs[1:] - xs[:-1])
-    
-    start_idx = len(map_objs)
-    count = 0
-    
     for x, y, l, o in zip(map_obj_xs, map_obj_ys, lengths, orientations):
         map_objs.append([
             x, y, l, 0, 
@@ -293,10 +260,8 @@ class LasvsimEnv():
 
                 # 路口连接线
                 for connection in junc.get("connections", {}):
-                    # FIXME: adapt to new version of qx
                     linestring = LineString([(p['x'], p['y']) for p in connection["path"]["points"]])
-                    linestring = linestring.simplify(0.2).segmentize(5.0)
-                    count = add_connection_objs(connection, map_objs, max_speed=self.config["max_speed"], obj_type=CENTER_LINE)
+                    count = add_map_objs(linestring, map_objs, max_speed=self.config["max_speed"], obj_type=CENTER_LINE, simplify_tol=0.2)
                     if connection["movement_id"] in movementid2map_obj.keys():
                         movementid2map_obj[connection["movement_id"]].extend(list(range(len(map_objs) - count, len(map_objs))))
                     else:
