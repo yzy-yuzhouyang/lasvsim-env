@@ -247,7 +247,7 @@ class LasvsimEnv():
                     elif lane_type == 1:
                         # 添加车道中心线
                         linestring = LineString([(p["point"]["x"], p["point"]["y"]) for p in lane["center_line"]])
-                        _count = add_map_objs(linestring, map_objs, max_speed=12.0, obj_type=CENTER_LINE)
+                        _count = add_map_objs(linestring, map_objs, max_speed=self.config["max_speed"], obj_type=CENTER_LINE)
                         map_objs_is_center_line.extend(list(range(len(map_objs) - _count, len(map_objs))))
                         count += _count
                     elif lane_type == 2:
@@ -296,7 +296,7 @@ class LasvsimEnv():
                     # FIXME: adapt to new version of qx
                     linestring = LineString([(p['x'], p['y']) for p in connection["path"]["points"]])
                     linestring = linestring.simplify(0.2).segmentize(5.0)
-                    count = add_connection_objs(connection, map_objs, max_speed=6.0, obj_type=CENTER_LINE)
+                    count = add_connection_objs(connection, map_objs, max_speed=self.config["max_speed"], obj_type=CENTER_LINE)
                     if connection["movement_id"] in movementid2map_obj.keys():
                         movementid2map_obj[connection["movement_id"]].extend(list(range(len(map_objs) - count, len(map_objs))))
                     else:
