@@ -4,8 +4,6 @@ from shapely import segmentize, simplify
 from collections import deque
 from typing import Any, Dict, Tuple, List, Deque
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
 from shapely.geometry import Point, LineString, Polygon
 from gops.utils.python_timer import Timeit, timeit
     
@@ -17,8 +15,7 @@ from lasvsim_env.utils.lib import \
 from lasvsim_env.utils.math_utils import \
     deal_with_phi_rad, convert_ref_to_ego_coord, \
     inverse_normalize_action, cal_dist, \
-    get_indices_of_k_smallest, convert_ground_coord_to_ego_coord, \
-    calculate_perpendicular_points
+    get_indices_of_k_smallest, convert_ground_coord_to_ego_coord
 from lasvsim_env.dataclass import EgoVehicle, SurroundingVehicle, LasVSimContext
 from lasvsim_env.traj_processor import compute_intervals, compute_intervals_in_junction, compute_intervals_initsegment_green, compute_intervals_initsegment_red
 
@@ -35,7 +32,7 @@ def add_map_objs(line_string, map_objs, max_speed, obj_type, simplify_tol=None):
     if simplify_tol is not None:
         line_string = simplify(line_string, tolerance=simplify_tol)
     line_string = segmentize(line_string, max_segment_length=5.0)
-    default_light_status = [0, 0, 1] # 默认交通灯（无灯）
+    default_light_status = [0, 0, 1]
 
     xs = np.array(line_string.xy[0]).astype(np.float32)
     ys = np.array(line_string.xy[1]).astype(np.float32)
@@ -83,6 +80,7 @@ class LasvsimEnv():
         token: str,
         env_config: Dict = {},
         task_id=None,
+        env_idx=0,
         is_testing: bool = False,
         server_host: str = "",
         **kwargs: Any,
@@ -94,21 +92,21 @@ class LasvsimEnv():
             endpoint=server_host,  # 接口地址
             token=token,  # 授权token
         ))
+
+        # ================== 2. Create simulator ==================
         if not is_testing: # 训练环境
             scene_list = self.qx_client.train_task.get_scene_id_list(task_id)
             scenario_list = scene_list["scene_id_list"]
             version_list = scene_list["scene_version_list"]
+            assert len(scenario_list) == len(version_list), "Error: scenario_list and version_list have different lengths."
 
-            random_index = random.randint(0, len(scenario_list) - 1)
-
-            self.scenario_id = scenario_list[random_index]
-            self.scenario_version = version_list[random_index]
+            scenario_id = scenario_list[env_idx % len(scenario_list)]
+            scenario_version = version_list[env_idx % len(scenario_list)]
 
             self.simulator = self.init_remote_lasvsim(
-                scenario_id=self.scenario_id,
-                scenario_version=self.scenario_version
+                scenario_id=scenario_id,
+                scenario_version=scenario_version
             )
-            print(f"randomly select scenario[{random_index}].")
         else: # 测试环境
             print("initializing test environment...")
             record_ids = self.qx_client.process_task.get_task_record_ids(task_id)["record_ids"]
@@ -123,20 +121,21 @@ class LasvsimEnv():
 
             new_record = self.qx_client.process_task.copy_record(task_id, record_id)
             
-            self.scenario_id = new_record["scen_id"]
-            self.scenario_version = new_record["scen_ver"]
+            scenario_id = new_record["scen_id"]
+            scenario_version = new_record["scen_ver"]
+
+            self.record_id = new_record["new_record_id"]      # useful in other functions
+            self.sim_record_id = new_record["sim_record_id"]  # useful in other functions
+
+            self.simulator = self.init_remote_lasvsim(
+                scenario_id=scenario_id,
+                scenario_version=scenario_version,
+                sim_record_id=self.sim_record_id,
+            )
+        print(f"env_idx: {env_idx}, scenario_id: {scenario_id}", flush=True)
             
-            self.simulator = self.qx_client.init_simulator_from_config(SimulatorConfig(
-                scen_id=new_record["scen_id"],
-                scen_ver=new_record["scen_ver"],
-                sim_record_id=new_record["sim_record_id"],
-            ))
-            print("New record id: ", new_record["new_record_id"])
-            
-        # ================== 2. Init simulator ==================
-        # init variables
+        # ================== 3. Init variables ==================
         self.config = env_config
-        self.scenario_cnt = 0
         self.alive_step = 0
         self.max_step = env_config["max_steps"]
         self.action_lower_bound = np.array(self.config["action_lower_bound"])
@@ -163,8 +162,11 @@ class LasvsimEnv():
                         self.nav_dim)
         
         # init ego vehicle
-        test_vehicle = self.get_remote_lasvsim_test_veh_list()
-        self.ego_id = random.choice(test_vehicle["list"])
+        test_vehicle_list = self.get_remote_lasvsim_test_veh_list()["list"]
+        assert len(test_vehicle_list) == 1, "Error: Only one test vehicle is allowed currently."
+        self.ego_id = test_vehicle_list[0]
+        print(f"ego_id: {self.ego_id}")
+
         self.lasvsim_context = LasVSimContext(
             ego=EgoVehicle(),
             ref_list=[],
@@ -174,15 +176,14 @@ class LasvsimEnv():
         self.can_not_get_lane_id = False
         self.global_link_nav = self.get_ego_navigation_info()
 
-        # ================== 3. Process static map, surroundings and render ==================
+        # ================== 4. Process static map and surroundings ==================
         self.movement_id_to_direction = {}
-        self.qx_map = self.get_remote_hdmap(self.scenario_id, self.scenario_version)
+        self.qx_map = self.get_remote_hdmap(scenario_id, scenario_version)
 
         self.laneid2lane = {}
         self.linkid2link = {}
         self.convert_map(self.qx_map)
         # print("len(self.laneid2lane): ", len(self.laneid2lane))
-        # 首先将每条车道构造成linestring对象，利用segmentize函数切成小段
         
         ROAD_EDGE   = [1, 0, 0, 0, 0, 0]
         LINE_EDGE   = [0, 1, 0, 0, 0, 0]
@@ -197,8 +198,8 @@ class LasvsimEnv():
         movementid2map_obj = {}
         map_objs_in_junction = [] # index of map_objs indicating whether a map_obj belongs to a junction
         map_objs_is_center_line = [] # index of map_objs indicating whether a map_obj is a center line
-        for seg in self.qx_map["data"]["segments"]: # 每个segment
-            for link in seg["ordered_links"]: # 每个link
+        for seg in self.qx_map["data"]["segments"]:
+            for link in seg["ordered_links"]:
                 # 左右道路边界
                 linestring = LineString([(p.get("x", 0), p.get("y", 0)) for p in link["left_boundary"]["points"]]) # TODO: 这里不应该默认给0，等待接口修复
                 count = add_map_objs(linestring, map_objs, max_speed=0.0, obj_type=ROAD_EDGE) # 道路边界线
@@ -247,7 +248,7 @@ class LasvsimEnv():
                     linkid2map_obj[link["id"]] = list(range(len(map_objs) - count, len(map_objs)))
                 total_count += count
 
-        for junc in self.qx_map["data"]["junctions"]: # 每个junction
+        for junc in self.qx_map["data"]["junctions"]:
             if junc["type"] == 1:
                 continue
             elif junc["type"] == 2:
@@ -294,10 +295,6 @@ class LasvsimEnv():
                     ])
                     total_count += 1
 
-
-        # 每个小段是一个vector，将这些信息按照观测形式进行保存，得到self.map_objs
-        # self.map_objs是长度为(S, 16)的向量，S表示切出来的vector数量（大约几千）
-        # 16维观测的设置按照RL Planner文档，这里的x,y,phi取绝对坐标
         assert total_count == len(map_objs), f"Error: total_count={total_count}, len(map_objs)={len(map_objs)}"
         assert len(map_objs_in_junction) == sum([len(idx) for idx in movementid2map_obj.values()]), f"Error: len(map_objs_in_junction)={len(map_objs_in_junction)}, sum([len(movementid2map_obj[m]) for m in movementid2map_obj.keys()])={sum([len(movementid2map_obj[m]) for m in movementid2map_obj.keys()])}"
 
@@ -337,11 +334,12 @@ class LasvsimEnv():
         self.step_info = None
         self.collision_info = None
 
-    def init_remote_lasvsim(self, scenario_id: str, scenario_version: str):
+    def init_remote_lasvsim(self, scenario_id: str, scenario_version: str, sim_record_id: str = None):
         # print(f"[LasvsimEnv] init_remote_lasvim with scenario_id={scenario_id} and version={scenario_version}...")
         return self.qx_client.init_simulator_from_config(SimulatorConfig(
             scen_id=scenario_id,
             scen_ver=scenario_version,
+            sim_record_id=sim_record_id,
         ))
 
     def update_lasvsim_context(self, real_action: np.ndarray = None):
@@ -624,39 +622,16 @@ class LasvsimEnv():
         return obs, reward, terminated, truncated, {**rew_info, **done_info, "event_alive_step": self.alive_step, "event_qx_error": 0}
 
     def reset(self, reset_traffic_flow: bool = False):
-        test_vehicle_list = []
         self.alive_step = 0
-        if self.scenario_cnt < 10:
-            while len(test_vehicle_list) == 0:
-                random_link_nav = self.global_link_nav[np.random.choice(len(self.global_link_nav)):]
-                reset_vehicle = [{"link_path": random_link_nav, "vehicle_id": self.ego_id}] if reset_traffic_flow else []
-                self.reset_remote_lasvsim(reset_traffic_flow, reset_vehicle)
-                res = self.step_remote_lasvsim(0.0, 0.0)
-                self.update_step_info(res)
-                test_vehicle = self.get_remote_lasvsim_test_veh_list()
-                if test_vehicle is not None:
-                    test_vehicle_list = test_vehicle["list"]
-            self.scenario_cnt += 1
-        else:
-            while len(test_vehicle_list) == 0:
-                self.stop_remote_lasvsim()
-                self.simulator = self.init_remote_lasvsim(
-                    scenario_id=self.scenario_id,
-                    scenario_version=self.scenario_version
-                )
-                res = self.step_remote_lasvsim(0.0, 0.0)
-                self.update_step_info(res)
-                test_vehicle = self.get_remote_lasvsim_test_veh_list()
-                if (test_vehicle is not None):
-                    test_vehicle_list = test_vehicle["list"]
-            self.scenario_cnt = 0
-
-        self.ego_id = test_vehicle_list[0]
+        random_link_nav = self.global_link_nav[np.random.choice(len(self.global_link_nav)):]
+        reset_vehicle = [{"link_path": random_link_nav, "vehicle_id": self.ego_id}] if reset_traffic_flow else []
+        self.reset_remote_lasvsim(reset_traffic_flow, reset_vehicle)
+        res = self.step_remote_lasvsim(0.0, 0.0)
+        self.update_step_info(res)
 
         # 速度和位置的随机初始化
         random_init_v = np.random.uniform(self.config["reset_v_min"], self.config["reset_v_max"])
         self.set_ego_speed(random_init_v)
-        # 获取自车位置
 
         random_offset_x = np.random.normal(0.0, 1.0)
         random_offset_y = np.random.normal(0.0, 1.0)
@@ -684,9 +659,7 @@ class LasvsimEnv():
         return np.array(ref_state_list) # [R, 3]
 
     # from rlplanner
-    def get_reward(self, t: np.ndarray,  # time step
-                   ref_param: List[LineString], 
-                  ) -> Tuple[List[np.ndarray], List[dict]]:
+    def get_reward(self, ref_param: List[LineString]) -> Tuple[List[np.ndarray], List[dict]]:
         # all inputs are batched
         ego= self.lasvsim_context.ego
 
