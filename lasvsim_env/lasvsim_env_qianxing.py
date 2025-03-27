@@ -19,7 +19,7 @@ from lasvsim_env.utils.math_utils import \
 from lasvsim_env.dataclass import EgoVehicle, SurroundingVehicle, LasVSimContext
 from lasvsim_env.traj_processor import compute_intervals, compute_intervals_in_junction, compute_intervals_initsegment_green, compute_intervals_initsegment_red
 
-def add_map_objs(line_string, map_objs, max_speed, obj_type, simplify_tol=None):
+def add_map_objs(line_string, map_objs, max_speed, obj_type, simplify_tol=0.2):
     """
     Add segmentized line_string to map_objs.
     Args:
