@@ -1245,7 +1245,9 @@ class LasvsimEnv():
         # update traffic light, movement_id, dis_to_next_junction and flow_direction
         vehicle_navigation = self.simulator.get_idc_vehicle_nav(self.ego_id)
         movement_id = vehicle_navigation["next_movement_id"]
-        dis_to_next_junction = vehicle_navigation["dis_to_next_junction"]
+
+        # set dis_to_next_junction if next_junction_id is ''
+        dis_to_next_junction = vehicle_navigation["dis_to_next_junction"] if vehicle_navigation["next_junction_id"] != '' else 1000
 
         # 偏离路口就没有movement_id
         traffic_light = "unknown"
@@ -1288,6 +1290,7 @@ class LasvsimEnv():
             polygon=polygon,
             traffic_light=traffic_light,
             dis_to_next_junction=dis_to_next_junction,
+            v_limit=v_limit,
             flow_direction=flow_direction
         )
 
