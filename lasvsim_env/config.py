@@ -81,8 +81,9 @@ env_config_multilane = {
     "ahead_lane_length_min": 6.0,
     "ahead_lane_length_max": 60.0,
     "v_discount_in_junction_straight": 0.75,
-    "v_discount_in_junction_left_turn": 0.3,
-    "v_discount_in_junction_right_turn": 0.3,
+    "v_discount_in_junction_left_turn": 0.5,
+    "v_discount_in_junction_right_turn": 0.5,
+    "v_discount_in_junction_uturn": 0.3,
     "dec_before_junction_green": 0.8,
     "dec_before_junction_red": 1.3,
 }

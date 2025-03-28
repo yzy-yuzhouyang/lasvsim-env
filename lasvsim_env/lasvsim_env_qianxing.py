@@ -1,5 +1,6 @@
 import os
 import random
+import warnings
 from shapely import segmentize, simplify
 from collections import deque
 from typing import Any, Dict, Tuple, List, Deque
@@ -267,8 +268,14 @@ class LasvsimEnv():
 
                 # 路口连接线
                 for connection in junc.get("connections", {}):
-                    linestring = LineString([(p['x'], p['y']) for p in connection["path"]["points"]])
-                    count = add_map_objs(linestring, map_objs, max_speed=self.config["max_speed"], obj_type=CENTER_LINE, simplify_tol=0.2)
+                    flow_direction = self.movement_id_to_direction[connection["movement_id"]]
+
+                    v_limit, warn_flag = self.get_v_limit_by_flow_direction(self.config["max_speed"], flow_direction)
+                    if warn_flag:
+                        warnings.warn(f"[init get unknown flow_direction] flow_direction: {flow_direction} connection: {connection}, junc: {junc}")
+
+                    linestring = LineString([(p.get("x", 0), p.get("y", 0)) for p in connection["path"]["points"]])
+                    count = add_map_objs(linestring, map_objs, max_speed=v_limit, obj_type=CENTER_LINE, simplify_tol=0.2)
                     if connection["movement_id"] in movementid2map_obj.keys():
                         movementid2map_obj[connection["movement_id"]].extend(list(range(len(map_objs) - count, len(map_objs))))
                     else:
@@ -392,11 +399,11 @@ class LasvsimEnv():
         
         driving_task = "s"
         if driving_task == "s":
-            ref_v_junction = max_speed * self.config["v_discount_in_junction_straight"]
+            v_limit_junction = max_speed * self.config["v_discount_in_junction_straight"]
         elif driving_task == "l":
-            ref_v_junction = max_speed * self.config["v_discount_in_junction_left_turn"]
+            v_limit_junction = max_speed * self.config["v_discount_in_junction_left_turn"]
         elif driving_task == "r":
-            ref_v_junction = max_speed * self.config["v_discount_in_junction_right_turn"]
+            v_limit_junction = max_speed * self.config["v_discount_in_junction_right_turn"]
         else:
             raise ValueError("Error driving task: {}".format(driving_task))
         
@@ -416,27 +423,27 @@ class LasvsimEnv():
             
             if current_part['destination'] == True:
                 position_on_ref = point_project_to_line(ref_line, *ego.ground_position)
-                intervals, ref_v = compute_intervals(ref_info, ref_horizon, cur_v, max_speed, dt, 0)
+                intervals, v_limit = compute_intervals(ref_info, ref_horizon, cur_v, max_speed, dt, 0)
             elif current_part['destination'] == False and current_part["in_junction"] == True:
-                intervals, ref_v = compute_intervals_in_junction(
-                    ref_horizon, ref_v_junction, dt)
+                intervals, v_limit = compute_intervals_in_junction(
+                    ref_horizon, v_limit_junction, dt)
             elif current_part["in_junction"] == False and current_part['destination'] == False:
                 if path_planning_mode == "green":
-                    intervals, ref_v = compute_intervals_initsegment_green(
-                        position_on_ref, current_part, ref_horizon, max_speed, ref_v_junction, dt, am)
+                    intervals, v_limit = compute_intervals_initsegment_green(
+                        position_on_ref, current_part, ref_horizon, max_speed, v_limit_junction, dt, am)
                 elif path_planning_mode == "red":
-                    intervals, ref_v = compute_intervals_initsegment_red(
+                    intervals, v_limit = compute_intervals_initsegment_red(
                         position_on_ref, current_part, ref_horizon, max_speed, dt, am, min_ahead_lane_length)
                 else:
                     raise ValueError("Error path_planning_mode")
             else:
                 raise ValueError("Error ref_line")
             # repeat the last v
-            ref_v = np.append(ref_v, ref_v[-1])
-            ref_v = np.expand_dims(ref_v, axis=1)
+            v_limit = np.append(v_limit, v_limit[-1])
+            v_limit = np.expand_dims(v_limit, axis=1)
             
             ref_array = compute_waypoints_by_intervals(ref_line, position_on_ref, intervals)
-            ref_array = np.concatenate((ref_array, ref_v), axis=-1)
+            ref_array = np.concatenate((ref_array, v_limit), axis=-1)
             ref_param.append(ref_array)
         return np.array(ref_param)
         
@@ -586,6 +593,7 @@ class LasvsimEnv():
                 one_hot_vector = np.array([0, 1, 0]) # 红灯或黄灯
             elif light_status == "unknown":
                 one_hot_vector = np.array([0, 0, 1])
+                warnings.warn(f"Warning: Unknown light status: {light_status}")
             else:
                 raise ValueError(f"Unknown light status: {light_status}")
             
@@ -680,8 +688,8 @@ class LasvsimEnv():
         # Note: ref_param is fixed during the planning process, but self.lasvsim_context.ref_list is updated every step
         ref_num = len(ref_param)
         ref_x, ref_y, ref_phi = self.get_closest_ref_point(ref_param).T
-        ref_v = np.repeat(self.config["max_speed"], ref_num) # (R, )
-        next_ref_v = ref_v
+        v_limit = np.repeat(ego.v_limit, ref_num) # (R, )
+        next_v_limit = v_limit
 
         # live reward
         rew_step = np.ones(ref_num)  # 0~1
@@ -692,7 +700,7 @@ class LasvsimEnv():
         delta_phi = deal_with_phi_rad(
             ego_phi - ref_phi) * 180 / np.pi  # degree
         ego_r = ego_r * 180 / np.pi  # degree
-        speed_error = ego_vx - ref_v
+        speed_error = ego_vx - v_limit
 
         # tracking_error
         punish_dist_lat = 5 * np.where(
@@ -721,10 +729,10 @@ class LasvsimEnv():
         )  # 0~1  0~8 degree/s 50% 0~2 degree/s
 
         punish_overspeed = np.zeros(ref_num)
-        index_lowspeed = ego_vx < ref_v
-        punish_overspeed[index_lowspeed] = 2 * (1 - ego_vx / ref_v[index_lowspeed])
-        index_overspeed = ego_vx > 1.1 * ref_v
-        punish_overspeed[index_overspeed] = (1 + ego_vx - ref_v[index_overspeed])
+        index_lowspeed = ego_vx < v_limit
+        punish_overspeed[index_lowspeed] = 2 * (1 - ego_vx / v_limit[index_lowspeed])
+        index_overspeed = ego_vx > 1.1 * v_limit
+        punish_overspeed[index_overspeed] = (1 + ego_vx - v_limit[index_overspeed])
         punish_overspeed = np.clip(punish_overspeed, 0, 2)
 
         # # reward related to action
@@ -777,8 +785,8 @@ class LasvsimEnv():
             # punish_head_ang = np.where(
             #     condition, punish_head_ang + 4, punish_head_ang)
 
-        break_condition = (ref_v < 1.5) & (
-            (next_ref_v - ref_v) < -0.1) | (ref_v < 1.0)
+        break_condition = (v_limit < 1.5) & (
+            (next_v_limit - v_limit) < -0.1) | (v_limit < 1.0)
         if break_condition.any() and self.config["nonimal_acc"]:
             nominal_acc = np.where(break_condition, -1.5, 0)
             # remove the effect of tracking error
@@ -1133,10 +1141,10 @@ class LasvsimEnv():
     def check_traffic_light_violation(self) -> bool:
         return (self.lasvsim_context.ego.traffic_light == "red" or \
                 self.lasvsim_context.ego.traffic_light == "yellow") \
-            and self.lasvsim_context.ego.dis_to_next_junction < 10
+            and self.lasvsim_context.ego.dis_to_next_junction < 5
 
     def get_direction_near_junction(self)-> str:
-        if self.lasvsim_context.ego.dis_to_next_junction > 20:
+        if self.lasvsim_context.ego.dis_to_next_junction > 25:
             return 0
         else:
             return self.lasvsim_context.ego.flow_direction
@@ -1241,9 +1249,8 @@ class LasvsimEnv():
 
         # 偏离路口就没有movement_id
         traffic_light = "unknown"
+        # 0: 未知 | 1:直行 | 2:左转 | 3:右转 | 4:掉头
         flow_direction = 0
-        if dis_to_next_junction is None:
-            dis_to_next_junction = 200
         if movement_id is not None and movement_id != "" and movement_id != "default":
             # 0:无信号灯或信号灯损坏 | 1:红灯 | 2:绿灯 | 3:黄灯
             light_status = self.simulator.get_movement_signal(movement_id)["current_signal"]
@@ -1259,7 +1266,14 @@ class LasvsimEnv():
                 raise ValueError(f"Invalid light status: {light_status}")
 
             flow_direction = self.movement_id_to_direction[movement_id]
-            
+
+        # set v_limit according if vehicle is injunction
+        v_limit = self.config["max_speed"]
+        if in_junction:
+            v_limit, warn_flag = self.get_v_limit_by_flow_direction(self.config["max_speed"], flow_direction)
+            if warn_flag:
+                warnings.warn(f"[get_ego_context get unknown flow_direction] flow_direction: {flow_direction}, junction_id: {junction_id}, lane_id: {lane_id}, dis_to_next_junction: {dis_to_next_junction}")
+                 
         return EgoVehicle(
             x=x, y=y, phi=phi, u=u, v=v, w=w,
             length=self.ego_length, width=self.ego_width,
@@ -1282,8 +1296,8 @@ class LasvsimEnv():
 
         if len(ref_lines)==0:
             if self.navigation_violation == 0 and self.pos_info["type"] != 3:
-                # raise ValueError("ref_lines is empty, but navigation_violation is False")
-                print("ref_lines is empty, but navigation_violation is False")
+                # If the following prompts appear, check that the map is correct
+                warnings.warn(f"ref_lines is empty, but navigation_violation is False, and pos_info: {self.pos_info}")
             if not self.can_not_get_lane_id:
                 lane_id = self.lasvsim_context.ego.lane_id
                 target_lane = self.laneid2lane[lane_id]
@@ -1295,7 +1309,8 @@ class LasvsimEnv():
 
         # remove the unnecessary ref lines near junction
         # Note: the index of the leftmost one is 0, and that of the rightmost one is -1
-        if ego_context.dis_to_next_junction < 20 and ego_context.in_junction == 0:
+        # TODO: identify "unnecessary" ref lines by the map
+        if ego_context.dis_to_next_junction < 35 and ego_context.in_junction == 0:
             if ego_context.flow_direction == 1: # straight
                 if len(ref_lines) > 3:
                     ref_lines = ref_lines[1:] # remove the leftmost line
@@ -1384,6 +1399,27 @@ class LasvsimEnv():
         real_action = np.clip(real_action, self.real_action_lower, self.real_action_upper)
         return real_action
 
+
+    def get_v_limit_by_flow_direction(self, max_speed, flow_direction) -> Tuple[float, bool]:
+        """"
+        "Get the speed limit by flow direction"
+        """
+        # 0: unknown | 1: straight | 2: left | 3: right | 4: uturn
+        if flow_direction == 1:
+            v_limit = max_speed * self.config["v_discount_in_junction_straight"]
+        elif flow_direction == 2:
+            v_limit = max_speed * self.config["v_discount_in_junction_left_turn"]
+        elif flow_direction == 3:
+            v_limit = max_speed * self.config["v_discount_in_junction_right_turn"]
+        elif flow_direction == 4:
+            v_limit = max_speed * self.config["v_discount_in_junction_uturn"]
+        elif flow_direction == 0:
+            return max_speed, True
+        else:
+            raise ValueError(f"Invalid flow_direction: {flow_direction}")
+        
+        return v_limit, False
+        
     def get_ego_navigation_info(self):
         return self.simulator.get_vehicle_navigation_info(self.ego_id)["navigation_info"]["link_nav"]
 

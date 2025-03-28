@@ -29,6 +29,7 @@ class EgoVehicle():
     polygon: Polygon = None
     traffic_light : str = 'default'
     dis_to_next_junction: float = 200.0
+    v_limit: float = -1.0
     flow_direction: int = -1 # 0: unknown, 1: straight, 2: left, 3: right, 4: uturn
 
     @property
@@ -134,6 +135,7 @@ class Config:
     v_discount_in_junction_straight: float = 0.75
     v_discount_in_junction_left_turn: float = 0.5
     v_discount_in_junction_right_turn: float = 0.5
+    v_discount_in_junction_uturn: float = 0.3
     ahead_lane_length_min: float = 6.0
     ahead_lane_length_max: float = 60.0
     dec_before_junction_green: float = 0.8
