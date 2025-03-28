@@ -249,9 +249,15 @@ class LasvsimEnv():
                 total_count += count
 
         for junc in self.qx_map["data"]["junctions"]:
-            if junc["type"] == 1:
-                continue
-            elif junc["type"] == 2:
+            if junc["type"] == 4 or junc["type"] == 5: # 匝道入口和出口
+                # 所有movements
+                for movement in junc.get("movements", {}):
+                    if movement["id"] in self.movement_id_to_direction.keys():
+                        # print(f"Error: duplicated movement id: {movement['id']}")
+                        pass
+                    self.movement_id_to_direction[movement["id"]] = movement["flow_direction"]
+                    movementid2map_obj[movement["id"]] = []
+            elif junc["type"] == 2: # 交叉口
                 # 所有movements
                 for movement in junc.get("movements", {}):
                     if movement["id"] in self.movement_id_to_direction.keys():
