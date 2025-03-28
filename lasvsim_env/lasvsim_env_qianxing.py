@@ -610,7 +610,7 @@ class LasvsimEnv():
         self.update_step_info(step_info)
         self.update_lasvsim_context(real_action)
 
-        reward, rew_info = self.reward_function_multilane()
+        reward, rew_info = self.reward_function_safety()
 
         obs = self.get_obs_from_context()
 
@@ -659,7 +659,7 @@ class LasvsimEnv():
         return np.array(ref_state_list) # [R, 3]
 
     # from rlplanner
-    def get_reward(self, ref_param: List[LineString]) -> Tuple[List[np.ndarray], List[dict]]:
+    def reward_function_efficiency(self, ref_param: List[LineString]) -> Tuple[List[np.ndarray], List[dict]]:
         # all inputs are batched
         ego= self.lasvsim_context.ego
 
@@ -754,20 +754,22 @@ class LasvsimEnv():
         #     reward_delta_steer = reward_delta_steer * 2
         #     punish_yaw_rate = punish_yaw_rate * 2
 
-        # if self.turning_direction != 0:  # left is positive =1
-        #     punish_dist_lat = punish_dist_lat * 0.5
-        #     punish_head_ang = punish_head_ang * 0.5
-        #     punish_yaw_rate = punish_yaw_rate * 0.2
-        #     reward_steering = reward_steering * 0.2
-        #     tracking_bias_direrction = np.sign(
-        #         tracking_error)  # left is positive
-        #     phi_direrction = np.sign(delta_phi)  # left is positive
-        #     condition = (self.turning_direction != tracking_bias_direrction) & (
-        #         self.turning_direction != phi_direrction) & (np.abs(tracking_error) > 0.05) & (np.abs(delta_phi) > 2)
-        #     punish_dist_lat = np.where(
-        #         condition, punish_dist_lat + 4, punish_dist_lat)
-        #     punish_head_ang = np.where(
-        #         condition, punish_head_ang + 4, punish_head_ang)
+        if ego.in_junction and ego.flow_direction in [2, 3, 4]: 
+            # in junction and task is left turn, right turn and U turn=
+            punish_dist_lat = punish_dist_lat * 0.5
+            punish_head_ang = punish_head_ang * 0.5
+            punish_yaw_rate = punish_yaw_rate * 0.05
+            reward_steering = reward_steering * 0.2
+
+            # tracking_bias_direrction = np.sign(
+            #     tracking_error)  # left is positive
+            # phi_direrction = np.sign(delta_phi)  # left is positive
+            # condition = (self.turning_direction != tracking_bias_direrction) & (
+            #     self.turning_direction != phi_direrction) & (np.abs(tracking_error) > 0.05) & (np.abs(delta_phi) > 2)
+            # punish_dist_lat = np.where(
+            #     condition, punish_dist_lat + 4, punish_dist_lat)
+            # punish_head_ang = np.where(
+            #     condition, punish_head_ang + 4, punish_head_ang)
 
         break_condition = (ref_v < 1.5) & (
             (next_ref_v - ref_v) < -0.1) | (ref_v < 1.0)
@@ -887,7 +889,7 @@ class LasvsimEnv():
         return nominal_steer
 
     # from rlplanner
-    def reward_function_multilane(self):
+    def reward_function_safety(self):
         ego = self.lasvsim_context.ego
         # cal reference_closest
         ref_list = self.lasvsim_context.ref_list
@@ -905,7 +907,6 @@ class LasvsimEnv():
         delta_phi = deal_with_phi_rad(ego.phi - current_first_ref_phi)
 
         self.out_of_range = tracking_error > 4 or np.abs(delta_phi) > np.pi/4
-        self.in_junction = ego.in_junction
         # self.in_multilane = self.engine.context.scenario_id in self.config["multilane_scenarios"]  # FIXME: hardcoded scenario_id
         # direction = vehicle.direction
         # if self.in_junction:
@@ -918,10 +919,6 @@ class LasvsimEnv():
         # ax = vehicle.ax
 
         # collision risk cost
-        # ego_vx = vehicle.vx
-        # ego_W = vehicle.width
-        # ego_L = vehicle.length
-
         safety_lat_margin_front = self.config["safety_lat_margin_front"]
         safety_lat_margin_rear = safety_lat_margin_front  # TODO: safety_lat_margin_rear
         safety_long_margin_front = self.config["safety_long_margin_front"]
@@ -1046,7 +1043,7 @@ class LasvsimEnv():
 
         # out of driving area cost
         # TODO: boundary cost = 0  when boundary info is not available
-        if self.in_junction or self.config["P_boundary"] == 0:
+        if ego.in_junction or self.config["P_boundary"] == 0:
             punish_boundary = 0.
         else:
             rel_angle = np.abs(delta_phi)
