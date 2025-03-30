@@ -661,6 +661,9 @@ class LasvsimEnv():
             self.pos_info["phi"]
         )
 
+        res = self.step_remote_lasvsim(0.0, 0.0)
+        self.update_step_info(res)
+
         self.update_lasvsim_context()
         obs = self.get_obs_from_context()
         info = {}
