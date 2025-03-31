@@ -111,15 +111,23 @@ class LasvsimEnv():
         else: # 测试环境
             print("initializing test environment...")
             record_ids = self.qx_client.process_task.get_task_record_ids(task_id)["record_ids"]
-            scen_ids = [self.qx_client.process_task.get_record_scenario(task_id, record_id)["scen_id"] for record_id in record_ids]
+            scene_list = []
+            for record_id in record_ids:
+                scene = self.qx_client.process_task.get_record_scenario(task_id, record_id)
+                scene_list.append(scene["scen_id"] + "-" + scene["scen_ver"]) 
+                # only when the scen_id and scen_ver are both the same, the record is the same
+            
             # remove the duplicated scen_id, and get the index of the non-duplicated scenarios in the original list
-            unique_scen_ids, unique_scen_indices = np.unique(scen_ids, return_index=True)
-            # randomly select one scenario
-            random_index = random.randint(0, len(unique_scen_indices) - 1)
+            unique_scen_ids, unique_scen_indices = np.unique(scene_list, return_index=True)
+            if env_idx == 0: # randomly select one scenario
+                random_index = random.randint(0, len(unique_scen_indices) - 1)
+                print(f"randomly select scenario: {unique_scen_ids[random_index]}")
+            else: # select the scenario according to the env_idx
+                random_index = env_idx % len(unique_scen_indices)
+                print(f"env_idx: {env_idx}, fixed index: {random_index}")
+            
             unique_scen_indice = unique_scen_indices[random_index]
             record_id = record_ids[unique_scen_indice]
-            print(f"randomly select scenario: {unique_scen_ids[random_index]}, record_id: {record_id}")
-
             new_record = self.qx_client.process_task.copy_record(task_id, record_id)
             
             scenario_id = new_record["scen_id"]
@@ -133,7 +141,6 @@ class LasvsimEnv():
                 scenario_version=scenario_version,
                 sim_record_id=self.sim_record_id,
             )
-        print(f"env_idx: {env_idx}, scenario_id: {scenario_id}", flush=True)
             
         # ================== 3. Init variables ==================
         self.config = env_config
