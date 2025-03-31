@@ -17,14 +17,14 @@ lasvsim_config = {
 
 dt = 0.1
 
-env_config_multilane = {
+env_config_default = {
     "dt": dt,
     "max_steps": 200,
     "eval_max_steps": 400,
-    "action_lower_bound": (-2.5 * dt, -0.065 * dt),
-    "action_upper_bound": (2.5 * dt, 0.065 * dt),
-    "real_action_lower_bound": (-1.5, -0.065),
-    "real_action_upper_bound": (0.8, 0.065),
+    "action_lower_bound": (-4.0 * dt, -0.571 * dt),
+    "action_upper_bound": (4.0 * dt, 0.571 * dt),
+    "real_action_lower_bound": (-2.0, -0.571),
+    "real_action_upper_bound": (0.8, 0.571),
     "max_speed": 12.0,
     "reset_traffic_flow": True,
     "reset_v_min": 5.0,
@@ -87,7 +87,3 @@ env_config_multilane = {
     "dec_before_junction_green": 0.8,
     "dec_before_junction_red": 1.3,
 }
-
-
-def get_env_config() -> Dict:
-    return env_config_multilane
