@@ -31,17 +31,6 @@ def get_indices_of_k_smallest(arr, k):
     idx = np.argpartition(arr, k)
     return idx[:k]
 
-def calculate_perpendicular_points(x0, y0, direction_radians, distance):
-    dx = -math.sin(direction_radians)
-    dy = math.cos(direction_radians)
-
-    x1 = x0 + distance * dx
-    y1 = y0 + distance * dy
-    x2 = x0 - distance * dx
-    y2 = y0 - distance * dy
-
-    return (x1, y1), (x2, y2)
-
 def convert_ground_coord_to_ego_coord(x, y, phi, ego_x, ego_y, ego_phi):
     shift_x, shift_y = shift(x, y, ego_x, ego_y)
     x_ego_coord, y_ego_coord, phi_ego_coord \
@@ -100,8 +89,3 @@ def ego_predict_model(ego_state: np.ndarray,
         (-Iz * omega * vx / Ts - (lf * Cf - lr * Cr) * vy + lf * Cf * steer * vx) / (
             (lf * lf * Cf + lr * lr * Cr) - Iz * vx / Ts)
     ])
-
-def convert_ego_coord_to_ground_coord(rel_x, rel_y, rel_phi, ego_x, ego_y, ego_phi):
-    delta_x, delta_y, phi = rotate(rel_x, rel_y, rel_phi, -ego_phi)
-    x, y = shift(delta_x, delta_y, -ego_x, -ego_y)
-    return x, y, phi
