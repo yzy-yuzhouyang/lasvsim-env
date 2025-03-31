@@ -1,7 +1,6 @@
 import os
 import random
 import warnings
-from shapely import segmentize, simplify
 from collections import deque
 from typing import Any, Dict, Tuple, List, Deque
 import numpy as np
@@ -11,69 +10,12 @@ from gops.utils.python_timer import Timeit, timeit
 from lasvsim_openapi.client import Client
 from lasvsim_openapi.http_client import HttpConfig
 from lasvsim_openapi.simulator_model import SimulatorConfig, Point as QxPoint
-from lasvsim_env.utils.lib import \
-    point_project_to_line, compute_waypoints_by_intervals, compute_waypoint, create_box_polygon
-from lasvsim_env.utils.math_utils import \
-    deal_with_phi_rad, convert_ref_to_ego_coord, \
-    inverse_normalize_action, cal_dist, \
-    get_indices_of_k_smallest, convert_ground_coord_to_ego_coord
+
 from lasvsim_env.dataclass import EgoVehicle, SurroundingVehicle, LasVSimContext
-from lasvsim_env.traj_processor import compute_intervals, compute_intervals_in_junction, compute_intervals_initsegment_green, compute_intervals_initsegment_red
-
-def add_map_objs(line_string, map_objs, max_speed, obj_type, simplify_tol=0.2):
-    """
-    Add segmentized line_string to map_objs.
-    Args:
-        line_string: shapely.LineString.
-        map_objs: list.
-        obj_type: one-hot list, e.g. [0, 0, 1, 0, 0, 0] for center lanes.
-        simplify_tol: float, tolerance for simplifying the line_string.
-    """
-
-    if simplify_tol is not None:
-        line_string = simplify(line_string, tolerance=simplify_tol)
-    line_string = segmentize(line_string, max_segment_length=5.0)
-    default_light_status = [0, 0, 1]
-
-    xs = np.array(line_string.xy[0]).astype(np.float32)
-    ys = np.array(line_string.xy[1]).astype(np.float32)
-    xys = np.array([xs, ys]).T
-    map_obj_xs = (xs[:-1] + xs[1:]) / 2
-    map_obj_ys = (ys[:-1] + ys[1:]) / 2
-    lengths = np.linalg.norm(xys[1:] - xys[:-1], axis=1) / 2
-    orientations = np.arctan2(ys[1:] - ys[:-1], xs[1:] - xs[:-1])
-    # 将每条linestring的所有vector添加到map_objs
-    count = 0
-    for x, y, l, o in zip(map_obj_xs, map_obj_ys, lengths, orientations):
-        map_objs.append([
-            x, y, l, 0, 
-            np.cos(o), np.sin(o), max_speed,
-            *obj_type,
-            *default_light_status
-        ])
-        count += 1
-    return count
-
-NAVI_UNKNOWN  = np.array([1, 0, 0, 0, 0])
-NAVI_STRAIGHT = np.array([0, 1, 0, 0, 0])
-NAVI_LEFT     = np.array([0, 0, 1, 0, 0])
-NAVI_RIGHT    = np.array([0, 0, 0, 1, 0])
-NAVI_UTURN    = np.array([0, 0, 0, 0, 1])
-
-def get_nav_obs_by_flow_direction(flow_direction):
-    if flow_direction == 0:
-        return NAVI_UNKNOWN
-    elif flow_direction == 1:
-        return NAVI_STRAIGHT
-    elif flow_direction == 2:
-        return NAVI_LEFT
-    elif flow_direction == 3:
-        return NAVI_RIGHT
-    elif flow_direction == 4:
-        return NAVI_UTURN
-    else:
-        print(f"Error: unknown flow direction: {flow_direction}")
-        return NAVI_UNKNOWN
+from lasvsim_env.utils.lib import point_project_to_line, compute_waypoints_by_intervals, compute_waypoint, create_box_polygon
+from lasvsim_env.utils.math_utils import deal_with_phi_rad, inverse_normalize_action, cal_dist, get_indices_of_k_smallest, convert_ground_coord_to_ego_coord
+from lasvsim_env.utils.traj_utils import compute_intervals, compute_intervals_in_junction, compute_intervals_initsegment_green, compute_intervals_initsegment_red
+from lasvsim_env.utils.obs_utils import add_map_objs, get_nav_obs_by_flow_direction
 
 class LasvsimEnv():
     def __init__(
@@ -148,14 +90,10 @@ class LasvsimEnv():
         self.max_step = env_config["max_steps"]
         self.action_lower_bound = np.array(self.config["action_lower_bound"])
         self.action_upper_bound = np.array(self.config["action_upper_bound"])
-        self.action_center = (self.action_upper_bound +
-                              self.action_lower_bound) / 2
-        self.action_half_range = (
-            self.action_upper_bound - self.action_lower_bound) / 2
-        self.real_action_upper = np.array(
-            self.config["real_action_upper_bound"])
-        self.real_action_lower = np.array(
-            self.config["real_action_lower_bound"])
+        self.action_center = (self.action_upper_bound + self.action_lower_bound) / 2
+        self.action_half_range = (self.action_upper_bound - self.action_lower_bound) / 2
+        self.real_action_upper = np.array(self.config["real_action_upper_bound"])
+        self.real_action_lower = np.array(self.config["real_action_lower_bound"])
 
         self.ego_dim = self.config['obs_dict']['ego']
         self.sur_num = self.config['obs_dict']['sur_num']
@@ -186,11 +124,11 @@ class LasvsimEnv():
 
         # ================== 4. Process static map and surroundings ==================
         self.movement_id_to_direction = {}
-        self.qx_map = self.get_remote_hdmap(scenario_id, scenario_version)
+        qx_map = self.get_remote_hdmap(scenario_id, scenario_version)
 
         self.laneid2lane = {}
         self.linkid2link = {}
-        self.convert_map(self.qx_map)
+        self.convert_map(qx_map)
         # print("len(self.laneid2lane): ", len(self.laneid2lane))
         
         ROAD_EDGE   = [1, 0, 0, 0, 0, 0]
@@ -206,7 +144,7 @@ class LasvsimEnv():
         movementid2map_obj = {}
         map_objs_in_junction = [] # index of map_objs indicating whether a map_obj belongs to a junction
         map_objs_is_center_line = [] # index of map_objs indicating whether a map_obj is a center line
-        for seg in self.qx_map["data"]["segments"]:
+        for seg in qx_map["data"]["segments"]:
             for link in seg["ordered_links"]:
                 # 左右道路边界
                 linestring = LineString([(p.get("x", 0), p.get("y", 0)) for p in link["left_boundary"]["points"]]) # TODO: 这里不应该默认给0，等待接口修复
@@ -256,7 +194,7 @@ class LasvsimEnv():
                     linkid2map_obj[link["id"]] = list(range(len(map_objs) - count, len(map_objs)))
                 total_count += count
 
-        for junc in self.qx_map["data"]["junctions"]:
+        for junc in qx_map["data"]["junctions"]:
             if junc["type"] == 4 or junc["type"] == 5: # 匝道入口和出口
                 # 所有movements
                 for movement in junc.get("movements", {}):
@@ -600,7 +538,7 @@ class LasvsimEnv():
                 one_hot_vector = np.array([0, 1, 0]) # 红灯或黄灯
             elif light_status == "unknown":
                 one_hot_vector = np.array([0, 0, 1])
-                warnings.warn(f"Warning: Unknown light status: {light_status}")
+                # warnings.warn(f"Warning: Unknown light status: {light_status}")
             else:
                 raise ValueError(f"Unknown light status: {light_status}")
             
@@ -745,19 +683,6 @@ class LasvsimEnv():
         punish_overspeed[index_overspeed] = (1 + ego_vx - v_limit[index_overspeed])
         punish_overspeed = np.clip(punish_overspeed, 0, 2)
 
-        # # reward related to action
-        # nominal_steer = self._get_nominal_steer_by_state_batch(
-        #     ego_state, ref_param) * 180 / np.pi
-
-        # abs_steer = np.abs(last_steer - nominal_steer)
-        # reward_steering = -np.where(abs_steer < 4,
-        #                             np.square(abs_steer), 2 * abs_steer + 8)
-
-        # self.out_of_action_range = abs_steer > 20
-
-        # if ego_vx < 0.1 and self.config["enable_slow_reward"]:
-        #     reward_steering = reward_steering * 5
-
         reward_steering = np.zeros(ref_num) 
         
         abs_ax = np.abs(last_acc) * np.ones(ref_num)
@@ -873,44 +798,6 @@ class LasvsimEnv():
         }
 
         return rewards, infos
-
-    def _get_nominal_steer_by_state_batch(
-            self,
-            ego_state,
-            ref_param: List[LineString]
-        ):
-        # ref_param: [R, 2N+1, 4]
-        # use ref_state_index to determine the start, from 2N+1 to 3
-        # ref_line: [R, 3, 4]
-        def cal_curvature(x1, y1, x2, y2, x3, y3):
-            # cal curvature by three points in batch format
-            # dim of x1 is [R]
-            a = np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
-            b = np.sqrt((x3 - x2) ** 2 + (y3 - y2) ** 2)
-            c = np.sqrt((x3 - x1) ** 2 + (y3 - y1) ** 2)
-            k = np.zeros_like(a)
-            i = (a * b * c) != 0
-            area = x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2)
-            k[i] = 2 * area[i] / (a[i] * b[i] * c[i])
-            return k
-        
-        ref_param_array = self.get_all_ref_param(ref_param)
-
-        ref_line = np.stack([ref_param_array[:, i, :]
-                            for i in [0, 5, 10]], axis=1)  # [R, 3, 4]
-        ref_x_ego_coord, ref_y_ego_coord, ref_phi_ego_coord = \
-            convert_ref_to_ego_coord(ref_line[:, :, :3], ego_state)  # [R, 3]
-
-        # nominal action
-        x1, y1 = ref_x_ego_coord[:, 0], ref_y_ego_coord[:, 0]  # [R,]
-        x2, y2 = ref_x_ego_coord[:, 1], ref_y_ego_coord[:, 1]
-        x3, y3 = ref_x_ego_coord[:, 2], ref_y_ego_coord[:, 2]
-        nominal_curvature = cal_curvature(x1, y1, x2, y2, x3, y3)
-        nominal_steer = nominal_curvature * 2.65  # FIXME: hard-coded: wheel base
-        nominal_steer = np.clip(
-            nominal_steer, self.real_action_lower[1], self.real_action_upper[1])
-
-        return nominal_steer
 
     # from rlplanner
     def reward_function_safety(self):
@@ -1432,6 +1319,71 @@ class LasvsimEnv():
             raise ValueError(f"Invalid flow_direction: {flow_direction}")
         
         return v_limit, False
+    
+    @property
+    def sum_keys(self):
+        return {
+            "reward_part1",
+            "reward_done",
+            "reward_collision",
+            "reward_collision_risk",
+            "rewardcomp_pun2front",
+            "rewardcomp_pun2side",
+            "rewardcomp_pun2space",
+            "rewardcomp_pun2rear",
+            "reward_boundary",
+            "reward_traffic_light_violation",
+
+            "reward_part2",
+            "reward_step",
+            "reward_dist_lat",
+            "reward_head_ang",
+            "reward_nominal_acc",
+            "reward_overspeed",
+            "reward_yaw_rate",
+            "reward_steering",
+            "reward_acc_long",
+            "reward_delta_steer",
+            "reward_jerk",
+
+            "event_pause",
+            "event_regionout",
+            "event_collision",
+            "event_mapout",
+        }
+    
+    @property
+    def avg_keys(self):
+        return {
+            "ego_vx",
+            "ego_speed2limit",
+            "ego_abs_phi_error",
+            "ego_abs_tracking_error",
+            "ego_abs_yaw_rate",
+
+            "action_abs_steer",
+            "action_abs_acc",
+            "action_abs_delta_steer",
+            "action_abs_delta_acc",
+        }
+    
+    @property
+    def max_keys(self):
+        return {
+            "event_alive_step",
+            "event_collision",
+            "event_mapout",
+            "event_regionout",
+            "event_max_step_truncated",
+            "event_success",
+            "event_qx_error",
+            "event_traffic_light_violation",
+            "event_navigation_violation",
+        }
+
+    @property
+    def all_keys(self):
+        return list(self.sum_keys | self.avg_keys | self.max_keys)
         
     def get_ego_navigation_info(self):
         return self.simulator.get_vehicle_navigation_info(self.ego_id)["navigation_info"]["link_nav"]
@@ -1479,13 +1431,13 @@ class LasvsimEnv():
     
 
 if __name__ == "__main__":
-    from lasvsim_env.config import get_env_config
+    from lasvsim_env.get_config import get_env_config
     env = LasvsimEnv(
-        token="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjIwNCwib2lkIjoxMDEsIm5hbWUiOiLlvKDlt7fohb4iLCJpZGVudGl0eSI6Im5vcm1hbCIsInBlcm1pc3Npb25zIjpbXSwiaXNzIjoidXNlciIsInN1YiI6Ikxhc1ZTaW0iLCJleHAiOjE3NDE4NTk3MTMsIm5iZiI6MTc0MTI1NDkxMywiaWF0IjoxNzQxMjU0OTEzLCJqdGkiOiIyMDQifQ.MsHgmYVMBk3KJvBuVwQlmUe4CppXQeeyPtt9L99dbg0",
+        token="specify your token here",
         env_config=get_env_config(),
         task_id=147,
         is_testing=False,
-        server_host="http://172.17.0.191:8290"
+        server_host="http://localhost:8290" # modify this if you are using a remote server
     )
     env.stop_remote_lasvsim()
     
