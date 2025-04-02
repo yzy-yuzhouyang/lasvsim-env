@@ -1199,13 +1199,13 @@ class LasvsimEnv():
                 # If the following prompts appear, check that the map is correct
                 warnings.warn(f"ref_lines is empty, but navigation_violation is False, and pos_info: {self.pos_info}")
             if not self.can_not_get_lane_id:
-                lane_id = self.lasvsim_context.ego.lane_id
+                lane_id = ego_context.lane_id
                 target_lane = self.laneid2lane[lane_id]
                 ref_line_xy = [[p["point"]["x"], p["point"]["y"]] for p in target_lane["center_line"]]
                 ref_line_string = LineString(ref_line_xy)
-                return [ref_line_string] * len(self.lasvsim_context.ref_list)
+                return [ref_line_string]
             else:
-                return self.lasvsim_context.ref_list
+                return ego_context.ref_list
 
         # remove the unnecessary ref lines near junction
         # Note: the index of the leftmost one is 0, and that of the rightmost one is -1
